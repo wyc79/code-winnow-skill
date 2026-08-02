@@ -4,7 +4,7 @@ Hard dependencies: Python 3.8+ and `git`. Everything else is a companion skill, 
 
 ## Check first, then tell the user
 
-Before Step 1, check which companion skills are actually present in this runtime. Anything missing gets one compact notice — once, before the review starts, not discovered halfway through.
+**After Step 0, before Step 1** — this check reads and may write `.code-winnow/substitutions.md`, and Step 0 is what keeps that directory out of the diff under review. Check which companion skills are actually present in this runtime. Anything missing gets one compact notice — once, before the review starts, not discovered halfway through.
 
 The reason to surface it rather than quietly degrade: the user may have the thing under a different name, may want it installed, or may not care. All three are reasonable, and only they know which. Silently taking the weakest option and mentioning it in a footnote at the end wastes the run.
 
@@ -31,13 +31,15 @@ If nothing is missing, say nothing at all.
 
 ## Do not wait for an answer that is not coming
 
-"Then wait" assumes someone is there. Take option 2 immediately, without asking, when any of these hold:
+"Then wait" assumes someone is there. The run is unattended when any of these hold:
 
 - the run was started by a schedule, a hook, a cron job, or CI
 - the runtime has no way to deliver a question (headless, piped stdin, batch)
 - the user has already said they are stepping away, or a previous question in this session went unanswered
 
-In that case put the notice at the top of the report instead of in the chat, phrased as what was unavailable and what it cost. A blocked run has failed more completely than a degraded one — the degraded review still lands, and the user can re-run it with the companions installed if the gap mattered.
+Take option 2 immediately, without asking, and put the notice at the top of the report instead of in the chat, phrased as what was unavailable and what it cost. A blocked run has failed more completely than a degraded one — the degraded review still lands, and the user can re-run it with the companions installed if the gap mattered.
+
+**This licenses proceeding without an answer. It does not license editing without an approval.** An unattended run stops after the report is written — see the unattended table in SKILL.md. Nothing in "do not wait" reaches Step 5, because the missing answer there is not a preference between equivalent paths; it is consent to delete lines from files git cannot restore.
 
 ## Capability matrix
 
@@ -47,7 +49,7 @@ In that case put the notice at the top of the report instead of in the chat, phr
 | `superpowers:*` | Listed in available skills | Their operative content is summarized inline in SKILL.md Steps 3 and 6. | Yes |
 | `andrej-karpathy-skills:karpathy-guidelines` | Listed in available skills | Inline digest in SKILL.md Step 5. | Yes |
 | A simplification skill | Listed in available skills | Note residual complexity as a P2 finding instead of restructuring it. | Sometimes — see below |
-| Shell / file writes | Try it | Ask the user to run `scan.py` and paste the output; report inline instead of writing `.code-winnow/`. | No |
+| Shell / file writes | Try it | Ask the user to run `scan.py` and paste the output; report inline instead of writing `.code-winnow/`. **No writes means no backup, which means no edits** — end at the report. | No |
 
 Do not assume any particular skill ships with any particular runtime. Claude Code installs vary per user and per project — a skill being absent tells you nothing about where you are running, so never infer the host from a missing capability. Detect, report, degrade.
 
@@ -110,4 +112,6 @@ SKILL.md avoids Claude-Code-only syntax. Slash commands do not appear on the req
 
 ## The floor
 
-With zero companion skills, the run is still complete: exclude the workspace → resolve scope → scan → judgment pass → report → approval → fix → verify. The companions improve the judgment and the review. They are not load-bearing, and the review is worth running without them.
+With zero companion skills, the run is still complete: exclude the workspace → resolve scope → scan → judgment pass → report → approval → back up → fix → verify. The companions improve the judgment and the review. They are not load-bearing, and the review is worth running without them.
+
+The backup is load-bearing, though. Without a shell or a writable filesystem you cannot make one, and then the run ends at the report — see SKILL.md Step 5a. Report the findings, say the fixes were not applied because no restore point could be written, and let the user apply them by hand.

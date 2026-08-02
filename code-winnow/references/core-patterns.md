@@ -4,6 +4,8 @@ Language-agnostic. Load this every run, then load the language-specific file.
 
 Each entry: the tell, why it costs something, and the test for whether it is actually slop in this case.
 
+**Run the tests — they need the repo, and that is allowed.** "Trace every caller", "grep for the function's core operation", "check scenes and assets": these are searches for evidence, and they are the only thing standing between a confident deletion and a broken build. They do not conflict with the scope rules, which govern what becomes a *finding*, not what you may look at. Nothing you see outside the diff is reportable, however bad it is. If a lookup is impossible in this runtime, say "unverified", drop the finding to P3, and do not propose the deletion.
+
 ## Comments
 
 **Restating the code.** `// increment the counter` above `counter++`. Costs a line, adds nothing, and trains readers to skip comments — which means they skip the one that mattered.
@@ -14,7 +16,8 @@ Each entry: the tell, why it costs something, and the test for whether it is act
 
 **Hedged narration.** "This should handle most cases", "we may want to revisit this". Uncertainty with no owner and no ticket. Either it's a known limitation worth documenting concretely, or it's noise.
 
-**Changelog comments.** `// Updated to use new API` — that is what version control is for.
+**Changelog comments.** `// Updated to use new API`, `// Added in v2.3` — that is what version control is for.
+*Test:* does the version or date explain why the code below is shaped that way, or only record when someone touched it? `// Workaround for UE 5.4 normalize bug` is the first and stays. A bare "updated in v2.3" is the second and goes.
 
 ## Error handling
 
@@ -81,9 +84,11 @@ Each entry: the tell, why it costs something, and the test for whether it is act
 **Formatting churn.** Reindentation, quote-style changes, import reordering on lines the change did not touch. This is the single most reviewer-hostile thing in a generated diff — it buries three real lines under two hundred cosmetic ones.
 *Fix:* revert those hunks entirely.
 
-**Unicode hazards.** **P1.** Em dashes, smart quotes, non-breaking spaces, and zero-width characters in source, string literals, or identifiers. They break greps, diffs, and occasionally parsers, and they are invisible in review.
+**Invisible characters.** **P1.** Non-breaking spaces, zero-width spaces and joiners, word joiners, bidi overrides. You cannot see them in review at all, they break greps and diffs, and they occasionally break parsers. A byte-order mark at the very start of a file is not one of these — Visual Studio and MSBuild write it into every `.cs` file they touch.
 
-**Absolute local paths, machine names, or credentials** committed in config or test fixtures. **P1.**
+**Typographic characters — em dashes, en dashes, smart quotes — in code.** **P3, not P1.** They are visible, and they only cost you a grep that does not match. Delete them in identifiers and in code you expect to search. **Leave them in comments, docstrings, prose files, and user-facing copy** — localized `FText`/`LocalizedString` strings are supposed to use real typography, and "fix" that and you have degraded the product to satisfy a linter. The scanner agrees: P3, and it does not report them in comments, docstrings or prose files at all.
+
+**Absolute paths into a developer home directory** (`/Users/name/…`, `C:\Users\name\…`) committed in config or test fixtures. **P1.** A `/home/name/…` path is a P2 — half the containers alive use one as a deployment path. Either one drops a step inside a path-handling test or a documentation file, where it is data or an example rather than a leak. **Machine names or credentials: P1 always.**
 
 **Duplicated helper.** A utility written fresh that already exists in the repo.
 *Test:* grep for the function's core operation before accepting any new helper.

@@ -80,14 +80,20 @@ _REPO_ROOT = None
 
 
 def _git(args, cwd=None):
+    # core.quotePath=false stops git c-quoting every non-ASCII path. The
+    # unquoter below still exists for paths carrying quotes or control
+    # characters, which git escapes regardless of that setting.
     try:
         out = subprocess.run(
-            ["git"] + args, capture_output=True, text=True, check=False,
+            ["git", "-c", "core.quotePath=false"] + args,
+            capture_output=True, check=False,
             cwd=cwd or _REPO_ROOT,
         )
     except (FileNotFoundError, OSError):
         return None
-    return out.stdout if out.returncode == 0 else None
+    if out.returncode != 0:
+        return None
+    return out.stdout.decode("utf-8", errors="replace")
 
 
 def repo_root():
@@ -145,15 +151,43 @@ def slug(text):
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-") or "unknown"
 
 
+_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
+              "\\": 92, '"': 34}
+
+
 def unquote_diff_path(target):
-    """git quotes paths containing spaces or non-ASCII in c-style quotes."""
+    """Decode git's c-style path quoting.
+
+    The escapes are octal escapes of the path's UTF-8 *bytes*, so they have to
+    be rebuilt as bytes and decoded once at the end. `unicode_escape` reads
+    them as latin-1 code points instead and turns every accented filename into
+    mojibake that no longer names a file on disk.
+    """
     target = target.strip()
-    if target.startswith('"') and target.endswith('"') and len(target) > 1:
-        try:
-            return target[1:-1].encode().decode("unicode_escape")
-        except (UnicodeDecodeError, ValueError):
-            return target[1:-1]
-    return target
+    if not (len(target) > 1 and target.startswith('"') and target.endswith('"')):
+        return target
+    inner = target[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch != "\\":
+            out.extend(ch.encode("utf-8"))
+            i += 1
+        elif i + 1 < len(inner) and inner[i + 1] in _C_ESCAPES:
+            out.append(_C_ESCAPES[inner[i + 1]])
+            i += 2
+        elif i + 3 < len(inner) and inner[i + 1:i + 4].isdigit():
+            try:
+                out.append(int(inner[i + 1:i + 4], 8))
+                i += 4
+            except ValueError:
+                out.extend(ch.encode("utf-8"))
+                i += 1
+        else:
+            out.extend(ch.encode("utf-8"))
+            i += 1
+    return out.decode("utf-8", errors="replace")
 
 
 def parse_diff(raw, into=None):
@@ -167,7 +201,10 @@ def parse_diff(raw, into=None):
     path = None
     new_line = 0
     in_hunk = False
-    for line in raw.splitlines():
+    # split_lines, not splitlines(): an added line carrying a form feed split
+    # into two here, so the cursor advanced twice for one line and every added
+    # line below it was recorded one too high.
+    for line in split_lines(raw):
         if line.startswith("+++ "):
             target = unquote_diff_path(line[4:])
             path = None if target == "/dev/null" else re.sub(r"^b/", "", target)
@@ -193,10 +230,13 @@ def parse_diff(raw, into=None):
 
 
 def untracked_files():
-    out = _git(["ls-files", "--others", "--exclude-standard"])
+    # -z: NUL-separated and never quoted, so no unquoting step can get it
+    # wrong. Without it a non-ASCII new file arrived as a quoted literal and
+    # every open() on it failed.
+    out = _git(["ls-files", "--others", "--exclude-standard", "-z"])
     if not out:
         return []
-    return [p for p in out.splitlines() if p.strip()]
+    return [p for p in out.split("\0") if p.strip()]
 
 
 def count_lines(rel):
@@ -218,19 +258,35 @@ def resolve_diff(scope="auto", base=None):
         return None, None, {}
 
     def worktree():
+        # One diff, against HEAD. Diffing the index and the worktree
+        # separately produced two sets of line numbers - `--cached` numbers
+        # the index blob, plain `diff` numbers the worktree blob - and both
+        # were then matched against the worktree file. After `git add -p`, or
+        # "stage a fix and keep editing", every finding below the shift was
+        # written off as pre-existing and dropped.
         added = defaultdict(set)
         sources = []
-        for label, args in (("staged", ["diff", "--cached", "--unified=0"]),
-                            ("unstaged", ["diff", "--unified=0"])):
-            raw = _git(args + ["--no-renames", "--diff-filter=d"])
-            if raw and raw.strip():
-                before = len(added)
-                parse_diff(raw, added)
-                if len(added) >= before:
-                    sources.append(label)
+        raw = _git(["diff", "HEAD", "--unified=0", "--diff-filter=d"])
+        if raw is None:
+            # no commits yet: everything tracked is in the index
+            raw = _git(["diff", "--cached", "--unified=0", "--diff-filter=d"])
+        if raw and raw.strip():
+            parse_diff(raw, added)
+        for label, args in (("staged", ["diff", "--cached", "--name-only"]),
+                            ("unstaged", ["diff", "--name-only"])):
+            names = _git(args)
+            if names and names.strip():
+                sources.append(label)
         new_files = []
         for rel in untracked_files():
-            if skip_path(rel):
+            reason = skip_path(rel)
+            if reason:
+                # Record it. Dropping these in silence meant a branch whose
+                # only new files are generated came back as an empty scope,
+                # which reads exactly like a clean tree.
+                if not WORKSPACE_HINT.search(rel):
+                    READ_ERRORS.append({"path": rel,
+                                        "error": "skipped: " + reason})
                 continue
             n = count_lines(rel)
             if n:
@@ -243,13 +299,13 @@ def resolve_diff(scope="auto", base=None):
 
     if scope in ("auto", "worktree", "staged", "unstaged"):
         if scope == "staged":
-            raw = _git(["diff", "--cached", "--unified=0", "--no-renames",
+            raw = _git(["diff", "--cached", "--unified=0",
                         "--diff-filter=d"]) or ""
             added = {p: v for p, v in parse_diff(raw).items() if v}
             if added:
                 return "staged changes (git diff --cached)", "staged", added
         elif scope == "unstaged":
-            raw = _git(["diff", "--unified=0", "--no-renames",
+            raw = _git(["diff", "--unified=0",
                         "--diff-filter=d"]) or ""
             added = {p: v for p, v in parse_diff(raw).items() if v}
             if added:
@@ -270,8 +326,7 @@ def resolve_diff(scope="auto", base=None):
     if not ref_exists(ref):
         warn(f"base ref '{ref}' does not exist")
         return None, None, {}
-    raw = _git(["diff", "--unified=0", "--no-renames", "--diff-filter=d",
-                f"{ref}...HEAD"])
+    raw = _git(["diff", "--unified=0", "--diff-filter=d", f"{ref}...HEAD"])
     if raw is None:
         warn(f"could not diff against '{ref}' (no merge base?)")
         return None, None, {}
@@ -311,6 +366,20 @@ def skip_path(rel, max_bytes=DEFAULT_MAX_BYTES):
     return None
 
 
+def split_lines(text):
+    """Split exactly where git splits: on \\n, nothing else.
+
+    str.splitlines() also breaks on form feed, vertical tab, U+0085, U+2028
+    and U+2029. A single form feed - the conventional page separator in Python
+    and Emacs-formatted C - shifted every line number below it by one, which
+    silently mismatched the diff's added-line set and dropped real findings.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [t[:-1] if t.endswith("\r") else t for t in lines]
+
+
 def read_lines(rel):
     """Return the file's lines, or None after recording why not.
 
@@ -327,8 +396,12 @@ def read_lines(rel):
     if b"\x00" in blob[:8192]:
         READ_ERRORS.append({"path": rel, "error": "binary file"})
         return None
-    text = blob.decode("utf-8", errors="replace")
-    lines = text.splitlines()
+    # utf-8-sig, not utf-8: a leading BOM is an encoding marker that Visual
+    # Studio and MSBuild write into every .cs file they touch. Reporting it as
+    # an invisible character means a P1 on files nobody edited. A U+FEFF
+    # anywhere else in the file is still the real thing and still reported.
+    text = blob.decode("utf-8-sig", errors="replace")
+    lines = split_lines(text)
     if lines and len(text) / len(lines) > MINIFIED_AVG_LINE:
         READ_ERRORS.append({"path": rel, "error": "looks minified"})
         return None
@@ -416,20 +489,75 @@ UNICODE_TYPOGRAPHIC = {
 }
 
 RE_TODO = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
-RE_TICKET = re.compile(r"([A-Z]{2,}-\d+|#\d+|https?://)")
-RE_LOCAL_PATH = re.compile(
-    r"(/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+|[Cc]:\\Users\\)")
-RE_TRACE_LOG = re.compile(
-    r"(logger?|logging|Debug\.Log|UE_LOG|print|console\.log)\b.{0,60}?"
-    r"\b(entering|exiting|starting|finished|called|begin|end)\b",
-    re.I,
-)
+RE_LINK_OR_ISSUE = re.compile(r"#\d+|https?://")
+RE_TICKET_ID = re.compile(r"\b([A-Z]{2,})-\d+")
+# Standards and encodings share the ticket shape. Treating `UTF-8` as an issue
+# reference silently suppressed the orphan TODOs the rule exists to find.
+NOT_TICKET_PREFIXES = {
+    "UTF", "UCS", "ISO", "IEC", "SHA", "MD", "AES", "DES", "RSA", "HMAC",
+    "CRC", "UUID", "GUID", "IPV", "EUC", "GB", "GBK", "BIG", "CP", "ASCII",
+    "BASE", "PEP", "HTML", "CSS", "ES", "HTTP", "TLS", "SSL", "IEEE", "ANSI",
+    "PKCS", "JSON", "XML", "SQL", "OAUTH", "SI", "AMD", "ARM", "X",
+}
+RE_DEV_HOME = re.compile(
+    r"(/Users/[A-Za-z0-9._-]+|[Cc]:\\+Users\\+[A-Za-z0-9._-]+)")
+RE_UNIX_HOME = re.compile(r"/home/[A-Za-z0-9._-]+")
+# Two halves, deliberately. `logger?` is `logge` plus an optional `r`, so it
+# never matched `log.` - the commonest spelling of the case this targets. And
+# requiring the trace word inside a string literal is what keeps
+# `print(x, end="")` and `blueprint_started()` out of the results.
+RE_LOG_CALL = re.compile(
+    r"\b(log|logger|logging|_log|Debug\.Log\w*|UE_LOG|print|console\.log|"
+    r"System\.out\.print\w*)\s*[.(]", re.I)
+RE_TRACE_WORD = re.compile(
+    r"\b(entering|exiting|starting|finished|called|begin|end)\b", re.I)
 RE_COMMENTED_CODE = re.compile(r"^\s*(//|#)\s*[\w\]\)]+.*[;{}]\s*$")
+RE_TRIPLE_QUOTE = re.compile(r'"""|\'\'\'')
+
+
+def has_ticket(text):
+    """A link, an issue number, or a real ticket id - but not `UTF-8`,
+    `SHA-256`, `ISO-8601`, which match the same shape and mean nothing about
+    ownership."""
+    if RE_LINK_OR_ISSUE.search(text):
+        return True
+    return any(m.group(1) not in NOT_TICKET_PREFIXES
+               for m in RE_TICKET_ID.finditer(text))
+
+
+def docstring_lines(path, lines):
+    """Line numbers inside a Python triple-quoted string.
+
+    `comment_body` only understands single-line comment syntax, so a docstring
+    - the one place in a Python file you are supposed to write prose - was
+    treated as code and every em dash in it became a finding.
+    """
+    if os.path.splitext(path)[1].lower() not in PY_EXT:
+        return set()
+    inside = set()
+    delim = None
+    for idx, text in enumerate(lines, 1):
+        pos = 0
+        while True:
+            m = RE_TRIPLE_QUOTE.search(text, pos)
+            if not m:
+                break
+            if delim is None:
+                delim = m.group(0)
+                inside.add(idx)
+            elif m.group(0) == delim:
+                delim = None
+                inside.add(idx)
+            pos = m.end()
+        if delim is not None:
+            inside.add(idx)
+    return inside
 
 
 def check_universal(path, lines, findings):
     is_test = bool(TEST_HINT.search(path))
     is_prose = os.path.splitext(path)[1].lower() in PROSE_EXT
+    docs = docstring_lines(path, lines)
     for idx in range(1, len(lines) + 1):
         text = lines[idx - 1]
         body = comment_body(text)
@@ -441,7 +569,7 @@ def check_universal(path, lines, findings):
                     f"{name} in source - invisible in review, breaks grep",
                     anchor)
                 break
-        if not is_prose and body is None:
+        if not is_prose and body is None and idx not in docs:
             for ch, name in UNICODE_TYPOGRAPHIC.items():
                 if ch in text:
                     add(findings, path, idx, "P3", "unicode-typographic",
@@ -449,15 +577,27 @@ def check_universal(path, lines, findings):
                         anchor)
                     break
 
-        if RE_LOCAL_PATH.search(text):
-            add(findings, path, idx, "P1", "local-path",
-                "absolute local path committed", anchor)
+        # A developer home directory is never a deployment path, so it is a
+        # P1 wherever it lands. `/home/<name>` is a container path as often as
+        # a laptop one. Both are normal *data* in a path-handling test and
+        # normal *examples* in documentation, so demote one step in each.
+        illustrative = is_test or is_prose
+        if RE_DEV_HOME.search(text):
+            add(findings, path, idx, "P2" if illustrative else "P1",
+                "local-path",
+                "absolute path into a developer home directory", anchor)
+        elif RE_UNIX_HOME.search(text):
+            add(findings, path, idx, "P3" if illustrative else "P2",
+                "local-path",
+                "absolute /home path - a developer home or a container path, "
+                "confirm which", anchor)
 
-        if RE_TODO.search(text) and not RE_TICKET.search(text) and not is_test:
+        if RE_TODO.search(text) and not has_ticket(text) and not is_test:
             add(findings, path, idx, "P3", "orphan-todo",
                 "placeholder with no ticket or owner", anchor)
 
-        if RE_TRACE_LOG.search(text):
+        if RE_LOG_CALL.search(text) and any(
+                RE_TRACE_WORD.search(s) for s in RE_STRING.findall(text)):
             add(findings, path, idx, "P3", "trace-logging",
                 "entry/exit logging - usually debugging debris", anchor)
 
@@ -479,7 +619,10 @@ def check_universal(path, lines, findings):
 # python
 # --------------------------------------------------------------------------
 
-RE_PY_LOG_FSTRING = re.compile(r"\b(logger?|logging)\.\w+\(\s*f[\"']")
+RE_PY_LOG_FSTRING = re.compile(r"\b(log|logger|logging|_log)\.\w+\(\s*f[\"']")
+RE_PY_LOGCALL = re.compile(
+    r"\b(log|logger|logging|_log|LOG)\s*\.\w+\s*\(|\bprint\s*\("
+    r"|\btraceback\.(print_exc|format_exc)\b")
 RE_PY_TYPE_IGNORE = re.compile(r"#\s*type:\s*ignore")
 RE_PY_ANY = re.compile(r":\s*Any\b|->\s*Any\b|\[str,\s*Any\]")
 
@@ -532,10 +675,26 @@ def check_python(path, lines, findings):
 
         if isinstance(node, ast.ExceptHandler):
             body = node.body
+            broad = node.type is None or (
+                isinstance(node.type, ast.Name)
+                and node.type.id in ("Exception", "BaseException"))
             if len(body) == 1 and isinstance(body[0], ast.Pass):
-                add(findings, path, line, "P1", "swallowed-exception",
-                    "except/pass hides the failure entirely", anchor)
-            elif body and isinstance(body[-1], ast.Raise) and body[-1].exc is None:
+                if broad:
+                    add(findings, path, line, "P1", "swallowed-exception",
+                        "except/pass hides the failure entirely", anchor)
+                else:
+                    # `except FileNotFoundError: pass` is contextlib.suppress
+                    # written out. The failure it hides is named and expected.
+                    add(findings, path, line, "P2", "swallowed-exception",
+                        "except/pass on a named exception - contextlib.suppress "
+                        "spelled out; confirm this failure really is expected",
+                        anchor)
+            elif (body and isinstance(body[-1], ast.Raise)
+                  and body[-1].exc is None
+                  and RE_PY_LOGCALL.search(
+                      " ".join(lines[body[0].lineno - 1:body[-1].lineno]))):
+                # Only a duplicate traceback if something actually logged.
+                # `except X: conn.rollback(); raise` is the cleanup idiom.
                 add(findings, path, line, "P2", "log-and-reraise",
                     "logs then re-raises - duplicate traceback unless it adds "
                     "context", anchor)
@@ -799,11 +958,14 @@ def check_python_tests(path, tree, lines, findings):
             if any(isinstance(k, ast.keyword) and k.arg == "autouse"
                    for k in getattr(dec, "keywords", [])):
                 fixture_params.add(fn.name)
-    for name, line in fixtures.items():
-        if name not in fixture_params and used_names[name] <= 1:
-            add(findings, path, line, "P2", "unused-fixture",
-                f"fixture '{name}' is never requested by any test",
-                anchor_of(lines, line))
+    # conftest.py publishes fixtures to every test file beside and below it.
+    # Nothing in conftest requests them, so the rule fired on all of them.
+    if os.path.basename(path) != "conftest.py":
+        for name, line in fixtures.items():
+            if name not in fixture_params and used_names[name] <= 1:
+                add(findings, path, line, "P2", "unused-fixture",
+                    f"fixture '{name}' is never requested by any test in this "
+                    "file", anchor_of(lines, line))
 
     shapes = defaultdict(list)
     for fn in tests:
@@ -1073,6 +1235,13 @@ RE_CS_EXPENSIVE = re.compile(r"\b(Camera\.main|FindObjectOfType|GameObject\.Find
 RE_CS_PERFRAME = re.compile(r"\b(GetComponent(InChildren|InParent)?<|Camera\.main|"
                             r"FindObjectOfType|GameObject\.Find)\b")
 RE_CS_METHOD = re.compile(r"\bvoid\s+(Update|FixedUpdate|LateUpdate)\s*\(\s*\)")
+# Where the scene lookup is supposed to happen. The rule's own message says
+# "cache in Awake", so firing on the cached assignment contradicts itself.
+RE_CS_INIT_METHOD = re.compile(r"\bvoid\s+(Awake|Start|OnEnable)\s*\(\s*\)")
+# `async void` is mandatory for a .NET event handler; there is no other way to
+# await inside one, and the signature is fixed by the delegate.
+RE_CS_EVENT_HANDLER = re.compile(
+    r"\([^)]*\b(sender|EventArgs|RoutedEventArgs|EventData)\b[^)]*\)")
 RE_CS_LINQ = re.compile(r"\.(Where|Select|OrderBy|ToList|ToArray|Any|First)\s*\(")
 
 # UnityEngine.Object subclasses, where `?.` and `??` skip the lifetime check.
@@ -1128,12 +1297,12 @@ def _cs_identifier_types(lines):
     return types, unity_classes
 
 
-def _cs_perframe_ranges(lines):
-    """Approximate line ranges of Update-family method bodies via brace depth."""
+def _cs_method_ranges(lines, rx):
+    """Approximate line ranges of matching method bodies via brace depth."""
     ranges = []
     i = 0
     while i < len(lines):
-        if RE_CS_METHOD.search(strip_code(lines[i])):
+        if rx.search(strip_code(lines[i])):
             depth = 0
             started = False
             start = i + 1
@@ -1153,7 +1322,9 @@ def _cs_perframe_ranges(lines):
 def check_csharp(path, lines, findings):
     joined = "\n".join(lines)
     is_unity = "using UnityEngine" in joined
-    perframe = _cs_perframe_ranges(lines) if is_unity else []
+    perframe = _cs_method_ranges(lines, RE_CS_METHOD) if is_unity else []
+    init_ranges = (_cs_method_ranges(lines, RE_CS_INIT_METHOD) if is_unity
+                   else [])
     ident_types, unity_classes = (_cs_identifier_types(lines) if is_unity
                                   else ({}, set()))
 
@@ -1188,7 +1359,7 @@ def check_csharp(path, lines, findings):
                         "confirm it is not a UnityEngine.Object", anchor)
                 break
 
-        if RE_CS_ASYNC_VOID.search(code):
+        if RE_CS_ASYNC_VOID.search(code) and not RE_CS_EVENT_HANDLER.search(code):
             add(findings, path, idx, "P2", "async-void",
                 "async void - exceptions escape unobservable", anchor)
 
@@ -1196,9 +1367,10 @@ def check_csharp(path, lines, findings):
             add(findings, path, idx, "P3", "debug-log",
                 "Debug.Log ships to builds - gate or delete", anchor)
 
-        if is_unity and RE_CS_EXPENSIVE.search(code):
+        in_init = any(lo <= idx <= hi for lo, hi in init_ranges)
+        if is_unity and RE_CS_EXPENSIVE.search(code) and not in_init:
             add(findings, path, idx, "P2", "expensive-lookup",
-                "scene-wide lookup - cache in Awake", anchor)
+                "scene-wide lookup - cache it in Awake or Start", anchor)
 
         in_perframe = any(lo <= idx <= hi for lo, hi in perframe)
         if in_perframe and RE_CS_PERFRAME.search(code):
@@ -1223,22 +1395,56 @@ RE_CPP_UOBJ_MEMBER = re.compile(
 RE_CPP_TARRAY_VALUE = re.compile(r"\(\s*(?!const\b)TArray<[^>]+>\s+\w+")
 RE_CPP_FSTRING_VALUE = re.compile(r"\(\s*(?!const\b)FString\s+\w+\s*[,)]")
 RE_CPP_REDUNDANT_NULL = re.compile(
-    r"\bif\s*\(\s*!?\s*(IsValid\s*\(\s*)?\w+\s*\)?\s*(!=\s*nullptr)?\s*\)")
-RE_CPP_NEWOBJECT = re.compile(r"\b(NewObject<|CreateDefaultSubobject<)")
+    r"\bif\s*\(\s*!?\s*(?:IsValid\s*\(\s*)?(\w+)\s*\)?\s*"
+    r"(?:[!=]=\s*nullptr)?\s*\)")
+RE_CPP_NEWOBJECT_ASSIGN = re.compile(
+    r"\b(\w+)\s*=\s*(?:NewObject<|CreateDefaultSubobject<)")
 RE_CPP_CLASS_OPEN = re.compile(
     r"^\s*(?:template\s*<[^>]*>\s*)?(class|struct)\s+(?:\w+_API\s+)?\w+"
     r"(?:\s*:\s*[^;{]+)?\s*(\{)?\s*$")
 RE_CPP_FUNC_OPEN = re.compile(r"\)\s*(const)?\s*(noexcept)?\s*(override)?\s*\{\s*$")
+# Allman brace, which is Epic's own style and the majority of UE code: the
+# signature ends the line and the body's brace is on the next one.
+RE_CPP_FUNC_SIG = re.compile(
+    r"\)\s*(?:const\s*)?(?:noexcept\s*)?(?:override\s*)?(?:final\s*)?$")
+RE_CPP_CONTROL = re.compile(r"^\s*(if|else|for|while|switch|catch|do|return)\b")
 NULLISH_INIT = {"nullptr", "null", "NULL", "{}", "0"}
 
 
+def _has_uproperty_above(lines, idx, lookback=8):
+    """True if the declaration at line `idx` carries a UPROPERTY/UFUNCTION
+    macro, including the wrapped form.
+
+    Only the single line above was checked, so Epic's own house style -
+
+        UPROPERTY(VisibleAnywhere, BlueprintReadOnly,
+                  Category = "Components")
+        UStaticMeshComponent* Mesh;
+
+    - looked like a bare member and drew a P1 saying it had no UPROPERTY.
+    Walking back while the parenthesis balance stays open finds the macro
+    without treating an unrelated declaration two lines up as one.
+    """
+    if "UPROPERTY" in lines[idx - 1]:
+        return True
+    depth = 0
+    for j in range(idx - 2, max(-1, idx - 2 - lookback), -1):
+        code = strip_code(lines[j])
+        if "UPROPERTY" in code or "UFUNCTION" in code:
+            return True
+        depth += code.count(")") - code.count("(")
+        if depth <= 0:
+            return False
+    return False
+
+
 def _cpp_member_ranges(lines):
-    """Line ranges that are inside a class/struct body but not inside a
-    function body.
+    """Line ranges inside a class/struct body, inline method bodies included.
 
     Without this, every local `UWorld* World = GetWorld();` in a .cpp was
     reported P1 as an unrooted UObject member. Locals are on the stack; the
-    GC rule is about members.
+    GC rule is about members. Subtracting inline method bodies is the caller's
+    job, using `_cpp_function_ranges`.
     """
     ranges = []
     i = 0
@@ -1260,18 +1466,9 @@ def _cpp_member_ranges(lines):
             continue
         depth = 0
         start = j + 1
-        func_depth = None
         for k in range(j, n):
             code = strip_code(lines[k])
-            opens, closes = code.count("{"), code.count("}")
-            if func_depth is None and RE_CPP_FUNC_OPEN.search(code) and depth >= 1:
-                func_depth = depth  # inline method body begins here
-            before = depth
-            depth += opens - closes
-            if func_depth is not None and depth <= func_depth:
-                func_depth = None
-            elif func_depth is None and before >= 1 and depth >= 1:
-                pass
+            depth += code.count("{") - code.count("}")
             if depth <= 0 and k > j:
                 ranges.append((start, k + 1))
                 i = k
@@ -1290,12 +1487,19 @@ def _cpp_function_ranges(lines):
     k = 0
     while k < n:
         code = strip_code(lines[k])
+        brace_at = None
         if RE_CPP_FUNC_OPEN.search(code):
+            brace_at = k
+        elif (RE_CPP_FUNC_SIG.search(code.rstrip())
+              and not RE_CPP_CONTROL.match(code)
+              and k + 1 < n and strip_code(lines[k + 1]).strip() == "{"):
+            brace_at = k + 1
+        if brace_at is not None:
             depth = 0
-            for j in range(k, n):
+            for j in range(brace_at, n):
                 c = strip_code(lines[j])
                 depth += c.count("{") - c.count("}")
-                if depth <= 0 and j > k:
+                if depth <= 0:
                     ranges.append((k + 1, j + 1))
                     k = j
                     break
@@ -1323,7 +1527,9 @@ def check_cpp(path, lines, findings):
                 "std container in Unreal code - TArray/TMap/FString are the "
                 "house convention", anchor)
 
-        if RE_CPP_IOSTREAM.search(text):
+        # UE_LOG does not exist outside Unreal, so this advice is only advice
+        # in a UE translation unit. Plain C++ printf is just printf.
+        if is_ue and RE_CPP_IOSTREAM.search(text):
             add(findings, path, idx, "P2", "raw-output",
                 "printf/iostream instead of UE_LOG", anchor)
 
@@ -1340,12 +1546,14 @@ def check_cpp(path, lines, findings):
         if m:
             init = (m.group(4) or "").strip()
             in_member = any(lo <= idx <= hi for lo, hi in member_ranges)
+            # Inside a function body it is a stack local, and locals are not
+            # GC roots to begin with. That holds for inline methods too, which
+            # sit inside the class body's member range - the previous guard
+            # `not (in_func and not in_member)` reduced to `True` there and
+            # every local in an inline method was reported as a member.
             in_func = any(lo <= idx <= hi for lo, hi in func_ranges)
-            has_prop = "UPROPERTY" in prev or "UPROPERTY" in text
-            # a declaration with a real initialiser inside a function body is a
-            # local, and locals are not GC roots to begin with
-            is_local = in_func and not in_member
-            if (in_member and not is_local and not has_prop
+            has_prop = _has_uproperty_above(lines, idx)
+            if (in_member and not in_func and not has_prop
                     and (not init or init in NULLISH_INIT)):
                 add(findings, path, idx, "P1", "unrooted-uobject",
                     f"'{m.group(2)}' is a raw UObject* member without "
@@ -1355,9 +1563,14 @@ def check_cpp(path, lines, findings):
             add(findings, path, idx, "P2", "pass-by-value",
                 "TArray/FString taken by value - copies on every call", anchor)
 
-        if RE_CPP_NEWOBJECT.search(prev) and RE_CPP_REDUNDANT_NULL.search(text):
+        # The check has to be ON the allocated object. Matching any `if (...)`
+        # after a NewObject line flagged `if (bWantsInit)` just as loudly.
+        m_new = RE_CPP_NEWOBJECT_ASSIGN.search(strip_code(prev))
+        m_null = RE_CPP_REDUNDANT_NULL.search(text) if m_new else None
+        if m_new and m_null and m_null.group(1) == m_new.group(1):
             add(findings, path, idx, "P2", "impossible-null-check",
-                "NewObject/CreateDefaultSubobject cannot return null - it "
+                f"'{m_new.group(1)}' comes from NewObject/"
+                "CreateDefaultSubobject, which cannot return null - it "
                 "crashes instead", anchor)
 
 
@@ -1413,16 +1626,20 @@ def check_bindings(path, lines, findings, exposed_note):
                     "inline it", anchor)
                 continue
 
+        # A header declares; the definition and every caller live in other
+        # translation units, and a partial class continues in another file.
+        # "Never referenced in this file" is vacuous for every line in them,
+        # so the rule reported the entire header - most loudly on exactly the
+        # UPROPERTY declarations it must never advise deleting.
+        if is_header or is_partial:
+            continue
+
         m = RE_MEMBER_DECL.match(text)
         if m:
             name = m.group(1)
             if counts[name] == 1 and len(name) > 1:
                 prev = lines[idx - 2] if idx >= 2 else ""
                 is_exposed = bool(EXPOSED.search(text) or EXPOSED.search(prev))
-                # a header declares; the definition and every caller live
-                # elsewhere, so "unreferenced in this file" means nothing
-                if is_header or is_partial:
-                    is_exposed = True
                 add(findings, path, idx,
                     "P3" if is_exposed else "P2", "unused-binding",
                     f"'{name}' is declared and never referenced in this file"
@@ -1446,6 +1663,46 @@ def finding_key(f):
     return (f["path"], f["rule"], f["message"], f.get("anchor", ""))
 
 
+def load_report(path, flag):
+    """A previous run's JSON, or None after warning why not."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            prior = json.load(fh)
+    except (OSError, ValueError) as exc:
+        warn(f"{flag}: could not read {path} ({exc}) - ignoring it")
+        return None
+    # Any JSON file at all can be pointed at these flags. A list or a string
+    # used to reach .get() and raise, which exited 1 with empty stdout - a
+    # --json consumer saw a parse error rather than a report.
+    if not isinstance(prior, dict) or not isinstance(prior.get("findings"), list):
+        warn(f"{flag}: {path} is not a scanner report (no 'findings' array) - "
+             "ignoring it")
+        return None
+    return prior
+
+
+def split_declined(findings, declined_path):
+    """Move findings the user already rejected out of the live list.
+
+    Without this a declined finding came back as `persisting` on every run.
+    A punch list that keeps re-raising settled items trains the reader to
+    skim, and then they skim past the P1 too.
+    """
+    prior = load_report(declined_path, "--declined")
+    if prior is None:
+        return findings, []
+    keys = {finding_key(f) for f in prior["findings"]
+            if isinstance(f, dict) and "path" in f and "rule" in f}
+    live, declined = [], []
+    for f in findings:
+        if finding_key(f) in keys:
+            f["status"] = "declined"
+            declined.append(f)
+        else:
+            live.append(f)
+    return live, declined
+
+
 def reconcile(findings, prior_path):
     """Mark findings new/persisting and return the ones that are gone.
 
@@ -1453,21 +1710,19 @@ def reconcile(findings, prior_path):
     longer true. Either way it must not be re-reported as live - a punch list
     that keeps resurfacing settled items stops being read.
     """
-    try:
-        with open(prior_path, encoding="utf-8") as fh:
-            prior = json.load(fh)
-    except (OSError, ValueError) as exc:
-        warn(f"--since: could not read {prior_path} ({exc}) - "
-             "reporting every finding as new")
+    prior = load_report(prior_path, "--since")
+    if prior is None:
         return None, []
 
     prior_findings = prior.get("findings", [])
-    if prior_findings and "anchor" not in prior_findings[0]:
+    if (prior_findings and isinstance(prior_findings[0], dict)
+            and "anchor" not in prior_findings[0]):
         warn(f"--since: {prior_path} predates anchored keys - "
              "reconciliation may be approximate")
     prior_keys = {}
     for f in prior_findings:
-        prior_keys.setdefault(finding_key(f), []).append(f)
+        if isinstance(f, dict) and "path" in f and "rule" in f:
+            prior_keys.setdefault(finding_key(f), []).append(f)
     now_counts = defaultdict(int)
     for f in findings:
         key = finding_key(f)
@@ -1488,13 +1743,14 @@ def reconcile(findings, prior_path):
 # --------------------------------------------------------------------------
 
 def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
+    """Number of lines reviewed, or None if the file was never read."""
     reason = skip_path(path, max_bytes)
     if reason:
         READ_ERRORS.append({"path": path, "error": "skipped: " + reason})
-        return
+        return None
     lines = read_lines(path)
     if lines is None:
-        return
+        return None
     ext = os.path.splitext(path)[1].lower()
     check_universal(path, lines, findings)
     if ext not in PY_EXT:
@@ -1513,6 +1769,7 @@ def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
         check_cpp(path, lines, findings)
         check_bindings(path, lines, findings,
                        "Blueprint/API surface, confirm before removing")
+    return len(lines)
 
 
 def main():
@@ -1539,23 +1796,44 @@ def main():
     ap.add_argument("--since", metavar="PRIOR.json",
                     help="reconcile against a previous run's JSON: mark findings "
                          "new/persisting and list ones no longer true")
+    ap.add_argument("--declined", metavar="DECLINED.json",
+                    help="a report-shaped JSON of findings the user already "
+                         "rejected; matches move to 'declined' and out of the "
+                         "live list instead of resurfacing every run")
     args = ap.parse_args()
 
     if args.report_name:
+        # --json has to stay JSON on every path, including this one. Printing
+        # a bare stem meant the one caller that pins the stem across calls got
+        # a parse error the moment it also asked for --json.
+        def emit_stem(stem):
+            if args.json:
+                print(json.dumps({"report_stem": stem,
+                                  "warnings": WARNINGS}, indent=2))
+            else:
+                print(stem)
+
         if args.paths:
-            print(report_stem("files"))
+            emit_stem(report_stem("files"))
             return 0
         _, target, _added = resolve_diff(args.scope, args.base)
         if target is None:
+            msg = "No diff found - cannot name a report for an empty scope."
+            if args.json:
+                print(json.dumps({"report_stem": None,
+                                  "warnings": WARNINGS + [msg]}, indent=2))
+                return 1
             for w in WARNINGS:
                 print("warning: " + w, file=sys.stderr)
-            print("No diff found - cannot name a report for an empty scope.",
-                  file=sys.stderr)
+            print(msg, file=sys.stderr)
             return 1
-        print(report_stem(target))
+        emit_stem(report_stem(target))
         return 0
 
     findings = []
+    in_scope_files = 0
+    scanned_files = 0
+    added_lines = 0
     if args.paths:
         target = "files"
         label = f"{len(args.paths)} named file(s), full contents"
@@ -1566,7 +1844,11 @@ def main():
                 rel = os.path.relpath(p, root)
             elif root:
                 rel = os.path.relpath(os.path.abspath(p), root)
-            scan_file(rel, findings, args.max_file_bytes)
+            in_scope_files += 1
+            n = scan_file(rel, findings, args.max_file_bytes)
+            if n is not None:
+                scanned_files += 1
+                added_lines += n  # whole files, so every line is in scope
         for f in findings:
             f["preexisting"] = False
     else:
@@ -1575,6 +1857,12 @@ def main():
             msg = ("No diff found in scope '%s'. Pass --paths to scan files "
                    "directly, or --base <ref> to name a base branch."
                    % args.scope)
+            # An empty scope that is empty *because everything in it was
+            # skipped* is not a clean tree, and must not print like one.
+            if READ_ERRORS:
+                msg += (f" {len(READ_ERRORS)} changed file(s) were skipped "
+                        "as vendored, generated, oversized or unreadable - "
+                        "see 'errors'. Nothing was reviewed.")
             # An empty scope still has to answer in the requested format.
             # Printing prose on stdout under --json made every consumer that
             # parses this - including the judgment pass - crash on a clean
@@ -1586,17 +1874,23 @@ def main():
                         timespec="seconds"),
                     "report_stem": args.stem or report_stem(target or "worktree"),
                     "prior_report": None,
-                    "findings": [], "resolved": [],
+                    "files": 0, "scanned_files": 0, "added_lines": 0,
+                    "findings": [], "resolved": [], "declined": [],
                     "errors": READ_ERRORS, "warnings": WARNINGS + [msg],
-                    "complete": True,
+                    "complete": not READ_ERRORS,
                 }, indent=2))
-                return 0
+                return 2 if READ_ERRORS else 0
             for w in WARNINGS:
                 print("warning: " + w, file=sys.stderr)
             print(msg)
-            return 0
+            for e in READ_ERRORS:
+                print(f"  {e['path']}: {e['error']}", file=sys.stderr)
+            return 2 if READ_ERRORS else 0
+        added_lines = sum(len(v) for v in added_map.values())
         for p in added_map:
-            scan_file(p, findings, args.max_file_bytes)
+            in_scope_files += 1
+            if scan_file(p, findings, args.max_file_bytes) is not None:
+                scanned_files += 1
         kept = []
         for f in findings:
             f["preexisting"] = f["line"] not in added_map.get(f["path"], set())
@@ -1604,21 +1898,47 @@ def main():
                 kept.append(f)
         findings = kept
 
+    # Reconcile the FULL set, then filter. Reconciling the filtered set meant
+    # raising --min-severity between runs reported every finding the filter
+    # dropped as "no longer true" - which reads as "fixed" and tells the
+    # reviewer to strike a live item off the list.
+    generated = datetime.datetime.now()
+    stem = args.stem or report_stem(target, generated)
+    declined = []
+    if args.declined:
+        findings, declined = split_declined(findings, args.declined)
+    prior_when, resolved = None, []
+    if args.since:
+        # Reconcile against live AND declined. A declined finding is still
+        # true - the user just does not want to hear about it - so counting
+        # only the live ones reported it as "no longer true", which reads as
+        # fixed. Declined and resolved are opposite claims about the same
+        # line and it must never make both.
+        prior_when, resolved = reconcile(findings + declined, args.since)
+        for f in declined:
+            f["status"] = "declined"  # reconcile restamps everything it counts
+
     cutoff = SEVERITY_ORDER[args.min_severity]
     findings = [f for f in findings if SEVERITY_ORDER[f["severity"]] <= cutoff]
     findings.sort(key=lambda f: (SEVERITY_ORDER[f["severity"]], f["path"], f["line"]))
-
-    generated = datetime.datetime.now()
-    stem = args.stem or report_stem(target, generated)
-    prior_when, resolved = None, []
-    if args.since:
-        prior_when, resolved = reconcile(findings, args.since)
+    resolved = [f for f in resolved
+                if SEVERITY_ORDER.get(f.get("severity"), 0) <= cutoff]
+    declined = [f for f in declined if SEVERITY_ORDER[f["severity"]] <= cutoff]
 
     # A read failure is a hole in the scan, not a detail. Say so in both modes.
     unreadable = [e for e in READ_ERRORS if not e["error"].startswith("skipped")]
     if unreadable:
         warn(f"{len(unreadable)} file(s) in scope could not be read - "
              "the scan is incomplete, see 'errors'")
+    # Every file skipped is not a clean branch; it is a scan that reviewed
+    # nothing. Left alone it prints the same 0-candidates/complete/exit-0
+    # shape as a genuinely clean diff.
+    reviewed_nothing = bool(in_scope_files) and not scanned_files
+    if reviewed_nothing:
+        warn(f"all {in_scope_files} file(s) in scope were skipped or "
+             "unreadable - nothing was reviewed, see 'errors'")
+    complete = not unreadable and not reviewed_nothing
+    exit_code = 0 if complete else 2
 
     if args.json:
         print(json.dumps({
@@ -1627,13 +1947,17 @@ def main():
             "report_stem": stem,
             "prior_report": {"path": args.since, "generated": prior_when}
                             if args.since else None,
+            "files": in_scope_files,
+            "scanned_files": scanned_files,
+            "added_lines": added_lines,
             "findings": findings,
             "resolved": resolved,
+            "declined": declined,
             "errors": READ_ERRORS,
             "warnings": WARNINGS,
-            "complete": not unreadable,
+            "complete": complete,
         }, indent=2))
-        return 2 if unreadable else 0
+        return exit_code
 
     in_scope = [f for f in findings if not f["preexisting"]]
     preexisting = [f for f in findings if f["preexisting"]]
@@ -1643,6 +1967,8 @@ def main():
     print(f"Scope: {label}")
     print(f"Generated: {generated.strftime('%Y-%m-%d %H:%M')}")
     print(f"Report stem: {stem}")
+    print(f"Files: {in_scope_files} in scope, {scanned_files} reviewed; "
+          f"added lines: {added_lines}")
     print(f"{len(in_scope)} candidate(s) in scope. "
           "These are candidates, not verdicts.\n")
 
@@ -1663,6 +1989,10 @@ def main():
               f"({len(resolved)}) ---")
         print("Fixed or overtaken by events. Do not re-report as live.\n")
         dump(resolved)
+    if declined:
+        print(f"--- previously declined ({len(declined)}) ---")
+        print("Raised before and rejected. Noted once, not re-argued.\n")
+        dump(declined)
     if preexisting:
         print(f"--- pre-existing, in files this change touches "
               f"({len(preexisting)}) ---")
@@ -1676,7 +2006,7 @@ def main():
             print(f"  {e['path']}: {e['error']}", file=sys.stderr)
     for w in WARNINGS:
         print("warning: " + w, file=sys.stderr)
-    return 2 if unreadable else 0
+    return exit_code
 
 
 if __name__ == "__main__":
