@@ -66,6 +66,13 @@ MINIFIED_AVG_LINE = 500
 WARNINGS = []
 READ_ERRORS = []
 
+# Fatal ones: the requested scope cannot be numbered and reviewed coherently,
+# so the run stops instead of guessing. Kept apart from WARNINGS because these
+# decide `complete` and the exit code - an empty scope is exit 0 and means a
+# clean tree, a refusal is exit 2 and means nothing was reviewed. Each entry
+# is the whole message, remedy included.
+REFUSALS = []
+
 # {path: {line}} - positions in the NEW file where the diff REMOVED content.
 #
 # Scope keyed on added lines cannot see a deletion-only change: cut a test's
@@ -280,6 +287,56 @@ def in_scope(added):
     return out
 
 
+def staged_then_edited(staged):
+    """Staged files that have since been edited in the worktree.
+
+    `git diff --name-only` is exactly the worktree-vs-index difference, so the
+    intersection with the staged set is the set of files that cannot be
+    numbered from the index and read from disk at the same time. Intersecting
+    against `staged` - which has already been through in_scope - keeps a
+    vendored or generated file from blocking a review it is not part of.
+    """
+    out = _git(["diff", "--name-only"])
+    if not out:
+        return []
+    dirty = {unquote_diff_path(n) for n in out.splitlines() if n.strip()}
+    return sorted(dirty & set(staged))
+
+
+def post_commit_command():
+    """A line to paste after committing, to review exactly what was committed.
+
+    `--base <pre-commit HEAD>` makes the new commit the entire diff, and the
+    branch scope reads the worktree, so it stays correct if editing continues.
+    """
+    head = (_git(["rev-parse", "--short", "HEAD"]) or "").strip()
+    if not head:
+        return None
+    return (f"{os.path.basename(sys.executable)} {sys.argv[0]} "
+            f"--scope branch --base {head}")
+
+
+def refuse_staged_desync(moved):
+    """Stop rather than mis-number.
+
+    The silent form of this is the expensive one: findings below the shift are
+    dropped from a `complete: true`, exit-0 report, and under `--since` the
+    next run prints them as resolved - an active claim that a P1 was fixed.
+    """
+    listed = ", ".join(moved[:5]) + (" ..." if len(moved) > 5 else "")
+    msg = (f"REFUSING: {len(moved)} file(s) are staged and have since been "
+           f"edited ({listed}). `git diff --cached` numbers the staged blob, "
+           "but every finding is read from the worktree, so the two describe "
+           "different content and findings would be dropped in silence. "
+           "Commit what you have staged and run this again, or pass "
+           "--scope worktree to review the staged and unstaged work together.")
+    cmd = post_commit_command()
+    if cmd:
+        msg += (" To review exactly what you committed, paste this after the "
+                f"commit: {cmd}")
+    REFUSALS.append(msg)
+
+
 def resolve_diff(scope="auto", base=None):
     """Return (label, target, {path: set(new_lines)}).
 
@@ -339,6 +396,10 @@ def resolve_diff(scope="auto", base=None):
                         "--diff-filter=d"]) or ""
             added = in_scope(parse_diff(raw))
             if added:
+                moved = staged_then_edited(added)
+                if moved:
+                    refuse_staged_desync(moved)
+                    return None, None, {}
                 return "staged changes (git diff --cached)", "staged", added
         elif scope == "unstaged":
             raw = _git(["diff", "--unified=0",
@@ -362,7 +423,19 @@ def resolve_diff(scope="auto", base=None):
     if not ref_exists(ref):
         warn(f"base ref '{ref}' does not exist")
         return None, None, {}
-    raw = _git(["diff", "--unified=0", "--diff-filter=d", f"{ref}...HEAD"])
+    # Three dots on the base side - the merge base - so commits that landed on
+    # the base after you branched are not counted as your changes. But diff
+    # that merge base against the WORKTREE, not against HEAD: every finding is
+    # read from disk, so pinning the head side to the last commit numbers a
+    # blob the rules never saw, and one uncommitted insert above a finding
+    # drops it from a `complete: true` report. Reviewing a branch you are
+    # still working on is the normal case, so the dirty tree is the case that
+    # has to work. `git merge-base` gets the base side without that pinning.
+    merge_base = (_git(["merge-base", ref, "HEAD"]) or "").strip()
+    if not merge_base:
+        warn(f"could not diff against '{ref}' (no merge base?)")
+        return None, None, {}
+    raw = _git(["diff", "--unified=0", "--diff-filter=d", merge_base])
     if raw is None:
         warn(f"could not diff against '{ref}' (no merge base?)")
         return None, None, {}
@@ -1741,8 +1814,30 @@ RE_ALIAS_LOCAL = re.compile(
 RE_DECL_SKIP = re.compile(
     r"^\s*(return|using|import|package|namespace|#|//|/\*|\*|typedef|delegate|"
     r"friend|template|else|case|partial)\b")
-EXPOSED = re.compile(r"\b(public|protected|internal|UPROPERTY|UFUNCTION|"
-                     r"SerializeField|Serializable|export)\b")
+# Access modifiers and the engine macros are the direct exposures. The rest
+# are attributes binding a field to something no token count in this file can
+# see: a scene file, a serializer, a DI container, the IL2CPP stripper. The
+# asymmetry decides what belongs here - over-matching costs a P3 and a confirm
+# note, under-matching emits P2 with no note, and P2-with-no-note is this
+# scanner's delete instruction. An attribute whose reach is uncertain is
+# therefore listed. Deleting a [SerializeReference] field drops every value
+# already set in scenes and prefabs, silently, with a clean compile.
+EXPOSED = re.compile(
+    r"\b(public|protected|internal|export"
+    r"|UPROPERTY|UFUNCTION"
+    # Unity serialization: the value lives in a scene or prefab, not in code.
+    r"|SerializeField|SerializeReference|FormerlySerializedAs|Serializable"
+    # Reached by reflection: stripping, DI, editor entry points.
+    r"|Preserve|RuntimeInitializeOnLoadMethod|InitializeOnLoad"
+    r"|InitializeOnLoadMethod|MenuItem|ContextMenu|ContextMenuItem"
+    r"|Inject|Injected"
+    # Serializer contracts - the field name is the wire format.
+    r"|JsonProperty|JsonPropertyName|JsonInclude|JsonRequired|JsonConverter"
+    r"|DataMember|DataContract|ProtoMember|XmlElement|XmlAttribute|XmlArray"
+    # Interop: the layout or the callback address is the contract.
+    r"|DllImport|MonoPInvokeCallback|UnmanagedCallersOnly"
+    r"|StructLayout|MarshalAs|FieldOffset"
+    r")\b")
 
 EXPOSED_LOOKBACK = 12
 
@@ -1809,6 +1904,43 @@ def _exposed_above(lines, idx, lookback=EXPOSED_LOOKBACK):
     return False
 
 
+# `$"...{expr}..."` puts code inside a string literal. strip_code blanks the
+# whole literal - correct for the brace counting it exists for - so the tokens
+# in an interpolation hole never reached the counter, and a field referenced
+# only from a format string counted as unreferenced. Read the holes here
+# rather than teaching strip_code to keep them: _exposed_above balances
+# brackets on stripped text, and leaving the braces in would desynchronise
+# that walk. C# only - Python f-strings reach the counter through ast, and
+# C++ has no interpolation.
+RE_CS_INTERPOLATED = re.compile(r"(?:\$@|@\$|\$)\"(?:\\.|\"\"|[^\"\\])*\"")
+
+
+def interpolation_holes(text):
+    """Identifiers inside `$"..."` interpolation holes.
+
+    `{{` and `}}` are literal braces rather than holes, so they come out
+    first. Depth is tracked because a hole can hold a collection initialiser
+    or a nested interpolation, and a non-greedy `{(.*?)}` would end the hole
+    at the first inner brace. A format spec (`{n,6:N0}`) contributes its
+    suffix as a token too - over-counting only ever suppresses a finding,
+    which is the safe direction for a rule that advises deletion.
+    """
+    names = []
+    for literal in RE_CS_INTERPOLATED.findall(text):
+        body = literal.replace("{{", "").replace("}}", "")
+        depth = start = 0
+        for i, ch in enumerate(body):
+            if ch == "{":
+                if depth == 0:
+                    start = i + 1
+                depth += 1
+            elif ch == "}" and depth:
+                depth -= 1
+                if depth == 0:
+                    names.extend(re.findall(r"\b[A-Za-z_]\w*\b", body[start:i]))
+    return names
+
+
 def check_bindings(path, lines, findings, exposed_note):
     """Bindings declared and never referenced (fields or locals); locals that
     only rename another binding for a single use.
@@ -1821,6 +1953,9 @@ def check_bindings(path, lines, findings, exposed_note):
     counts = defaultdict(int)
     for token in re.findall(r"\b[A-Za-z_]\w*\b", "\n".join(stripped)):
         counts[token] += 1
+    for text in lines:
+        for name in interpolation_holes(text):
+            counts[name] += 1
     is_partial = bool(re.search(r"\bpartial\s+(class|struct)\b", "\n".join(stripped)))
     is_header = os.path.splitext(path)[1].lower() in {".h", ".hpp", ".inl"}
 
@@ -2125,15 +2260,21 @@ def main():
             return 0
         _, target, _added = resolve_diff(args.scope, args.base)
         if target is None:
-            msg = "No diff found - cannot name a report for an empty scope."
+            # Step 2 pins the stem before anything else runs, so a refusal has
+            # to surface here too - with its own message and its own exit
+            # code. Reported as an empty scope it reads as a clean tree at the
+            # one point in the run that decides whether to continue.
+            refused = bool(REFUSALS)
+            msg = (" ".join(REFUSALS) if refused else
+                   "No diff found - cannot name a report for an empty scope.")
             if args.json:
                 print(json.dumps({"report_stem": None,
                                   "warnings": WARNINGS + [msg]}, indent=2))
-                return 1
+                return 2 if refused else 1
             for w in WARNINGS:
                 print("warning: " + w, file=sys.stderr)
             print(msg, file=sys.stderr)
-            return 1
+            return 2 if refused else 1
         emit_stem(report_stem(target))
         return 0
 
@@ -2161,15 +2302,20 @@ def main():
     else:
         label, target, added_map = resolve_diff(args.scope, args.base)
         if not added_map:
-            msg = ("No diff found in scope '%s'. Pass --paths to scan files "
-                   "directly, or --base <ref> to name a base branch."
-                   % args.scope)
-            # An empty scope that is empty *because everything in it was
-            # skipped* is not a clean tree, and must not print like one.
-            if READ_ERRORS:
-                msg += (f" {len(READ_ERRORS)} changed file(s) were skipped "
-                        "as vendored, generated, oversized or unreadable - "
-                        "see 'errors'. Nothing was reviewed.")
+            # A refusal is not an empty scope. It has its own message, and it
+            # must not be reported as a clean tree in either format.
+            if REFUSALS:
+                msg = " ".join(REFUSALS)
+            else:
+                msg = ("No diff found in scope '%s'. Pass --paths to scan "
+                       "files directly, or --base <ref> to name a base branch."
+                       % args.scope)
+                # An empty scope that is empty *because everything in it was
+                # skipped* is not a clean tree, and must not print like one.
+                if READ_ERRORS:
+                    msg += (f" {len(READ_ERRORS)} changed file(s) were skipped "
+                            "as vendored, generated, oversized or unreadable - "
+                            "see 'errors'. Nothing was reviewed.")
             # An empty scope still has to answer in the requested format.
             # Printing prose on stdout under --json made every consumer that
             # parses this - including the judgment pass - crash on a clean
@@ -2184,15 +2330,15 @@ def main():
                     "files": 0, "scanned_files": 0, "added_lines": 0,
                     "findings": [], "resolved": [], "declined": [],
                     "errors": READ_ERRORS, "warnings": WARNINGS + [msg],
-                    "complete": not READ_ERRORS,
+                    "complete": not READ_ERRORS and not REFUSALS,
                 }, indent=2))
-                return 2 if READ_ERRORS else 0
+                return 2 if (READ_ERRORS or REFUSALS) else 0
             for w in WARNINGS:
                 print("warning: " + w, file=sys.stderr)
-            print(msg)
+            print(msg, file=sys.stderr if REFUSALS else sys.stdout)
             for e in READ_ERRORS:
                 print(f"  {e['path']}: {e['error']}", file=sys.stderr)
-            return 2 if READ_ERRORS else 0
+            return 2 if (READ_ERRORS or REFUSALS) else 0
         added_lines = sum(len(v) for v in added_map.values())
         for p in added_map:
             in_scope_files += 1

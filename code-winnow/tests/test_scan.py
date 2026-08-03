@@ -193,6 +193,106 @@ def test_base_branch_other_than_main(repo):
     assert "dead-local" in rules(str(repo), "--scope", "branch", "--base", "develop")
 
 
+def test_branch_scope_numbers_against_the_worktree_not_head(repo):
+    """`$BASE...HEAD` numbers the HEAD blob, but every finding is read from
+    disk. One uncommitted insert above a finding pulled the two apart and the
+    finding vanished from a `complete: true`, exit-0 report - and under
+    `--since` it was then printed as resolved, i.e. actively claimed fixed.
+    Reviewing a branch you are still working on is the normal case, so the
+    dirty tree is the case that has to work, not the exception."""
+    git(repo, "checkout", "-qb", "feature")
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "work")
+    write(repo, "a.py",
+          "import os\nimport sys\ndef f():\n    dead = 1\n    return 2\n")
+    found = rules(str(repo), "--scope", "branch", "--base", "main")
+    assert "dead-local" in found, "the committed finding was lost to a shift"
+    assert found["dead-local"] == [4], "reported against the wrong line"
+
+
+def test_branch_scope_sees_work_that_is_not_committed_yet(repo):
+    """SKILL.md builds the agents' review input from the worktree, so the
+    scanner has to scope the same way or the agents are shown hunks that
+    carry no finding and findings that appear in no hunk."""
+    write(repo, "a.py", "def f():\n    return 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "checkout", "-qb", "feature")
+    write(repo, "a.py", "def f():\n    return 99\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "work")
+    # Uncommitted, and below every line the commit touched - so a
+    # commit-to-commit range cannot reach it even by coincidence.
+    write(repo, "a.py",
+          "def f():\n    return 99\n\n\ndef g():\n    dead = 1\n    return 2\n")
+    assert "dead-local" in rules(str(repo), "--scope", "branch", "--base", "main")
+
+
+def test_staged_scope_refuses_when_the_worktree_has_moved(repo):
+    """`git diff --cached` numbers the index blob while findings are read from
+    disk, so a file that is staged *and then edited* cannot be numbered and
+    reviewed coherently at once. Stop and say so rather than mis-number in
+    silence: the silent form drops findings and reports `complete: true`."""
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "a.py")
+    write(repo, "a.py", "import os\ndef f():\n    dead = 1\n    return 2\n")
+    proc = run(str(repo), "--json", "--scope", "staged")
+    data = json.loads(proc.stdout)
+    assert proc.returncode == 2, "a refusal must not exit 0"
+    assert data["complete"] is False, "a refusal is not a complete scan"
+    assert data["findings"] == []
+    joined = " ".join(data["warnings"])
+    assert "a.py" in joined, "the blocking file must be named"
+    assert "commit" in joined.lower(), "the remedy must be named"
+
+
+def test_the_staged_refusal_hands_over_a_runnable_next_command(repo):
+    """The user has to be able to act without composing a git invocation:
+    commit, then paste one line to review exactly what was committed."""
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "a.py")
+    write(repo, "a.py", "import os\ndef f():\n    dead = 1\n    return 2\n")
+    joined = " ".join(json.loads(
+        run(str(repo), "--json", "--scope", "staged").stdout)["warnings"])
+    assert "--scope branch --base" in joined, "no post-commit command offered"
+
+
+def test_staged_scope_runs_when_the_index_matches_the_worktree(repo):
+    """The refusal is about desync, not about staging. `git add` then scan -
+    the headline 'clean this up before I commit' flow - must still work."""
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "a.py")
+    assert "dead-local" in rules(str(repo), "--scope", "staged")
+
+
+def test_an_unstaged_edit_outside_the_staged_set_does_not_block(repo):
+    """Only a file that is itself both staged and since edited is unnumberable.
+    Refusing on any dirty file anywhere would make staged scope unusable in
+    the partially-staged repo it exists to serve."""
+    write(repo, "b.py", "y = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "b")
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "a.py")
+    write(repo, "b.py", "y = 2\n")
+    assert "dead-local" in rules(str(repo), "--scope", "staged")
+
+
+def test_report_name_refuses_instead_of_naming_an_empty_scope(repo):
+    """Step 2 pins the report stem before anything else runs, so it is the one
+    call that decides whether the run continues. A refusal reported there as
+    'no diff found' reads as a clean tree."""
+    write(repo, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "a.py")
+    write(repo, "a.py", "import os\ndef f():\n    dead = 1\n    return 2\n")
+    proc = run(str(repo), "--json", "--scope", "staged", "--report-name")
+    data = json.loads(proc.stdout)
+    assert proc.returncode == 2, "a refusal must not share the empty-scope code"
+    assert data["report_stem"] is None
+    assert "REFUSING" in " ".join(data["warnings"])
+
+
 def test_own_workspace_is_never_reviewed(repo):
     write(repo, ".code-winnow/report.py", "def f():\n    dead = 1\n    return 2\n")
     assert rules(str(repo)) == {}
@@ -648,6 +748,106 @@ def test_every_attribute_wrapping_keeps_the_confirm_note(tmp_path, attrs, label)
     assert found, f"no unused-binding finding for {label}"
     assert found[0]["severity"] == "P3", label
     assert "confirm" in found[0]["message"], label
+
+
+@pytest.mark.parametrize("attr,label", [
+    ("[SerializeReference]", "Unity polymorphic serialization"),
+    ("[FormerlySerializedAs(\"oldSpeed\")]", "Unity rename alias"),
+    ("[Preserve]", "IL2CPP stripping marker"),
+    ("[Inject]", "DI container injection"),
+    ("[JsonProperty(\"wire\")]", "Newtonsoft serialization"),
+    ("[JsonPropertyName(\"wire\")]", "System.Text.Json serialization"),
+    ("[JsonInclude]", "System.Text.Json opt-in"),
+    ("[DataMember]", "DataContract serialization"),
+    ("[XmlElement(\"node\")]", "XML serialization"),
+])
+def test_a_reflection_attribute_is_never_a_delete_instruction(tmp_path, attr, label):
+    """EXPOSED listed only `SerializeField|Serializable|UPROPERTY|UFUNCTION`
+    plus the access modifiers, so every other attribute that binds a field to
+    something outside this file's token stream fell through to P2 with no
+    note - and P2-with-no-note is this scanner's delete instruction (see
+    check_bindings' own docstring). Deleting a [SerializeReference] field
+    drops every value already set in scenes and prefabs, silently, with a
+    clean compile: the runtime-only failure no unit test catches."""
+    write(tmp_path, "Payload.cs",
+          "public class Payload {\n    %s\n    private object payload;\n}\n" % attr)
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "Payload.cs").stdout)
+    found = [f for f in data["findings"] if f["rule"] == "unused-binding"]
+    assert found, f"no unused-binding finding for {label}"
+    assert found[0]["severity"] == "P3", label
+    assert "confirm" in found[0]["message"], label
+
+
+@pytest.mark.parametrize("body,label", [
+    ("return $\"processed {recordCount} records\";", "interpolated string"),
+    ("return $@\"processed {recordCount}\";", "verbatim interpolated"),
+    ("return @$\"processed {recordCount}\";", "reversed verbatim prefix"),
+    ("return $\"a{recordCount}b{recordCount}c\";", "two holes"),
+    ("return $\"{recordCount,6:N0}\";", "alignment and format spec"),
+    ("return $\"{(recordCount > 0 ? recordCount : 0)}\";", "expression in hole"),
+])
+def test_a_field_used_only_inside_an_interpolated_string_is_not_unused(
+        tmp_path, body, label):
+    """strip_code blanks whole string literals before token counting, so an
+    interpolation hole - which is code, not text - was invisible. A private
+    field referenced only from `$"...{field}..."` came back as P2
+    unused-binding with no confirm note: a delete instruction aimed at a live
+    field, in the headline language, on idiomatic modern C#."""
+    write(tmp_path, "Report.cs",
+          "public class Report {\n"
+          "    private int recordCount;\n"
+          "    public string Render() { %s }\n"
+          "}\n" % body)
+    assert "unused-binding" not in rules(str(tmp_path), "--paths", "Report.cs"), label
+
+
+def test_a_name_appearing_only_in_a_plain_string_is_still_unused(tmp_path):
+    """The interpolation fix must read holes, not string bodies. Counting
+    every word inside every literal would suppress the rule wholesale - a
+    field named in a log message or a serialized key is still unreferenced."""
+    write(tmp_path, "Plain.cs",
+          "public class Plain {\n"
+          "    private int recordCount;\n"
+          "    public string Render() { return \"recordCount is high\"; }\n"
+          "}\n")
+    found = [f for f in json.loads(
+        run(str(tmp_path), "--json", "--paths", "Plain.cs").stdout)["findings"]
+        if f["rule"] == "unused-binding"]
+    assert found, "a name mentioned only as prose is not a reference"
+    assert found[0]["severity"] == "P2"
+
+
+def test_an_escaped_brace_is_not_an_interpolation_hole(tmp_path):
+    """`{{` is a literal brace in C# interpolation. Reading it as a hole would
+    make the text between two escaped braces look like code."""
+    write(tmp_path, "Esc.cs",
+          "public class Esc {\n"
+          "    private int recordCount;\n"
+          "    public string Render() { return $\"{{recordCount}}\"; }\n"
+          "}\n")
+    found = [f for f in json.loads(
+        run(str(tmp_path), "--json", "--paths", "Esc.cs").stdout)["findings"]
+        if f["rule"] == "unused-binding"]
+    assert found, "an escaped brace encloses text, not a reference"
+
+
+def test_interpolated_braces_do_not_disturb_the_attribute_walk(tmp_path):
+    """The hole-reading must not reach strip_code: brace counting in
+    _exposed_above depends on string literals staying blanked, and an
+    interpolated string sits between the attribute and the next field in
+    ordinary Unity code."""
+    write(tmp_path, "Mixed.cs",
+          "public class Mixed {\n"
+          "    public void Log() { Debug.Log($\"{Time.time} {{}}\"); }\n"
+          "    [SerializeField]\n"
+          "    private float tuned;\n"
+          "}\n")
+    found = [f for f in json.loads(
+        run(str(tmp_path), "--json", "--paths", "Mixed.cs").stdout)["findings"]
+        if f["rule"] == "unused-binding"]
+    assert found, "the serialized field should still be reported"
+    assert found[0]["severity"] == "P3"
+    assert "confirm" in found[0]["message"]
 
 
 def test_declining_one_instance_picks_that_instance_after_a_line_shift(tmp_path):
@@ -1307,3 +1507,217 @@ def test_header_declarations_are_not_unused_bindings(tmp_path):
           "    GENERATED_BODY()\n    UPROPERTY()\n"
           "    UStaticMeshComponent* Mesh;\n};\n")
     assert "unused-binding" not in rules(str(tmp_path), "--paths", "A.h")
+
+
+# --------------------------------------------------------------------------
+# rule coverage
+#
+# Every rule below had no test at all: disabling all fifteen at once left the
+# suite green, so nothing would have reported one going silent. A rule that
+# fires on everything is as useless as one that never fires, so each case is
+# paired with the guard that has to keep it quiet.
+# --------------------------------------------------------------------------
+
+def test_eager_log_format_fires_on_an_fstring_log_call(tmp_path):
+    write(tmp_path, "a.py", 'logger.info(f"took {ms}ms")\n')
+    assert "eager-log-format" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_eager_log_format_is_quiet_on_deferred_formatting(tmp_path):
+    """`%s` args are the fix this rule points at - flagging them too would
+    leave no way to satisfy it."""
+    write(tmp_path, "a.py", 'logger.info("took %s ms", ms)\n')
+    assert "eager-log-format" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_any_hint_fires_on_an_any_annotation(tmp_path):
+    write(tmp_path, "a.py", "def f(payload: Any) -> Any:\n    return payload\n")
+    assert "any-hint" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_any_hint_is_quiet_on_a_real_annotation(tmp_path):
+    write(tmp_path, "a.py", "def f(payload: int) -> int:\n    return payload\n")
+    assert "any-hint" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_async_no_await_fires_when_nothing_is_awaited(tmp_path):
+    write(tmp_path, "a.py", "async def fetch():\n    return 1\n")
+    assert "async-no-await" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_async_no_await_is_quiet_when_the_function_awaits(tmp_path):
+    write(tmp_path, "a.py", "async def fetch():\n    return await get()\n")
+    assert "async-no-await" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_async_no_await_counts_async_for_as_awaiting(tmp_path):
+    """`async for` and `async with` suspend too - reporting them as 'never
+    awaits' would advise removing the only thing making the function async."""
+    write(tmp_path, "a.py",
+          "async def drain():\n    async for row in cursor:\n        use(row)\n")
+    assert "async-no-await" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_bare_except_fires(tmp_path):
+    write(tmp_path, "a.py", "try:\n    work()\nexcept:\n    pass\n")
+    assert "bare-except" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_broad_except_fires_on_except_exception(tmp_path):
+    write(tmp_path, "a.py", "try:\n    work()\nexcept Exception:\n    pass\n")
+    assert "broad-except" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_broad_except_is_quiet_on_a_named_exception(tmp_path):
+    write(tmp_path, "a.py", "try:\n    work()\nexcept ValueError:\n    pass\n")
+    assert "broad-except" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_alias_variable_fires_on_a_python_rename(tmp_path):
+    write(tmp_path, "a.py", "def f():\n    tmp = source\n    return tmp\n")
+    assert "alias-variable" in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_alias_variable_is_quiet_when_the_alias_is_used_twice(tmp_path):
+    """Two uses is not a rename but a local; inlining would duplicate the
+    expression."""
+    write(tmp_path, "a.py",
+          "def f():\n    tmp = source\n    return tmp + tmp\n")
+    assert "alias-variable" not in rules(str(tmp_path), "--paths", "a.py")
+
+
+def test_alias_variable_fires_on_a_brace_language_rename(tmp_path):
+    """A second call site, in the shared brace-language pass - the Python one
+    going silent would not have covered it."""
+    write(tmp_path, "A.cs",
+          "public class A {\n    public void M() {\n"
+          "        var alias = original;\n        Use(alias);\n    }\n}\n")
+    assert "alias-variable" in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_empty_lifecycle_fires_on_an_empty_update(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Update() { }\n}\n")
+    assert "empty-lifecycle" in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_empty_lifecycle_is_quiet_on_a_lifecycle_method_with_a_body(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Update() { Move(); }\n}\n")
+    assert "empty-lifecycle" not in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_debug_log_fires_in_a_unity_file(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          '    void Boot() { Debug.Log("here"); }\n}\n')
+    assert "debug-log" in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_debug_log_is_quiet_outside_unity(tmp_path):
+    """Debug.Log advice is Unity advice; a plain C# file with a type of that
+    name is not shipping a Unity build."""
+    write(tmp_path, "A.cs",
+          'public class A {\n    void Boot() { Debug.Log("here"); }\n}\n')
+    assert "debug-log" not in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_perframe_lookup_fires_inside_update(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Update() {\n        var r = GetComponent<Rigidbody>();\n"
+          "    }\n}\n")
+    assert "perframe-lookup" in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_perframe_lookup_is_quiet_in_awake(tmp_path):
+    """Awake is where the rule's own message says to move the lookup, so
+    firing there would contradict the fix it advises."""
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Awake() {\n        var r = GetComponent<Rigidbody>();\n"
+          "    }\n}\n")
+    assert "perframe-lookup" not in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_perframe_linq_fires_inside_update(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Update() {\n        var f = items.Where(x => x.On).First();\n"
+          "    }\n}\n")
+    assert "perframe-linq" in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_perframe_linq_is_quiet_outside_a_per_frame_method(tmp_path):
+    write(tmp_path, "A.cs",
+          "using UnityEngine;\npublic class A : MonoBehaviour {\n"
+          "    void Setup() {\n        var f = items.Where(x => x.On).First();\n"
+          "    }\n}\n")
+    assert "perframe-linq" not in rules(str(tmp_path), "--paths", "A.cs")
+
+
+def test_std_in_ue_fires_on_a_std_container(tmp_path):
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\nvoid F() { std::vector<int> v; }\n')
+    assert "std-in-ue" in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_std_in_ue_is_quiet_in_plain_cpp(tmp_path):
+    """TArray/TMap are the house convention *in Unreal*. Outside it, std is
+    the convention, and this rule must not reach ordinary C++."""
+    write(tmp_path, "A.cpp",
+          "#include <vector>\nvoid F() { std::vector<int> v; }\n")
+    assert "std-in-ue" not in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_exceptions_in_ue_fires_on_a_try_block(tmp_path):
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\n'
+          "void F() { try { Risky(); } catch (int e) { } }\n")
+    assert "exceptions-in-ue" in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_member_prefix_fires_on_an_m_prefixed_member(tmp_path):
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\nclass AThing { int m_Count; };\n')
+    assert "member-prefix" in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_pass_by_value_fires_on_a_tarray_parameter(tmp_path):
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\nvoid Consume(TArray<int> Items);\n')
+    assert "pass-by-value" in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_pass_by_value_is_quiet_on_a_const_reference(tmp_path):
+    """`const TArray<int>&` is the fix; flagging it would leave the rule
+    unsatisfiable."""
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\nvoid Consume(const TArray<int>& Items);\n')
+    assert "pass-by-value" not in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_pass_by_value_fires_on_an_fstring_parameter(tmp_path):
+    write(tmp_path, "A.cpp",
+          '#include "CoreMinimal.h"\nvoid Log(FString Message);\n')
+    assert "pass-by-value" in rules(str(tmp_path), "--paths", "A.cpp")
+
+
+def test_tautological_assert_fires_on_one_bad_assert_among_good_ones(tmp_path):
+    """All-tautological is `tautological-test` at P1; the mixed case is this
+    rule at P2, pointing at the offending assertion rather than the function."""
+    write(tmp_path, "test_calc.py",
+          "def test_total():\n    assert 1 == 1\n    assert total() == 5\n")
+    found = rules(str(tmp_path), "--paths", "test_calc.py")
+    assert "tautological-assert" in found
+    assert found["tautological-assert"] == [2], "must point at the bad assert"
+
+
+def test_tautological_assert_fires_in_a_brace_language_test(tmp_path):
+    """A second call site, in the generic test pass."""
+    write(tmp_path, "app.test.js",
+          "test('total', () => {\n  expect(total).toBe(total);\n"
+          "  expect(sum(1, 2)).toBe(3);\n});\n")
+    assert "tautological-assert" in rules(str(tmp_path), "--paths", "app.test.js")

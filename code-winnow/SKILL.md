@@ -141,7 +141,7 @@ Three things this handles that a hand-rolled `git diff` ladder does not:
 
 - **Untracked files are in scope.** They are invisible to `git diff` in every mode, and brand-new files are exactly where generated code concentrates. Missing them is missing the point of the review.
 - **One staged file no longer eclipses the rest.** A stop-at-first-non-empty ladder reviews the staged fraction of a partially-staged branch and reports full confidence.
-- **The base branch is discovered**, in order: `origin/HEAD`, then `main`, `master`, `develop`, `development`, `trunk` — each tried as a local ref then as its remote-tracking form, `main` before `origin/main` before `master`. `--base` overrides. Branch diffs use three dots — the merge base — so commits that landed on the base after you branched do not appear as your changes.
+- **The base branch is discovered**, in order: `origin/HEAD`, then `main`, `master`, `develop`, `development`, `trunk` — each tried as a local ref then as its remote-tracking form, `main` before `origin/main` before `master`. `--base` overrides. Branch scope diffs the **merge base against the worktree**: the merge base on the near side, so commits that landed on the base after you branched do not appear as your changes, and the worktree on the far side, so uncommitted work on the branch is in scope. That is the same content the review input is built from — see Step 3.
 
 State the source and file count before continuing — `files`, `scanned_files` and `added_lines` come straight out of the JSON. If the user pointed at specific files, honor that and say so.
 
@@ -231,6 +231,15 @@ findings == []        → only means "clean" when the three above are clear
 ```
 
 Never report a clean result off `findings == []` alone. An empty `findings` with a non-empty `warnings` is a scan that did not happen.
+
+**A warning starting `REFUSING:` is not a failure to work around — it is a question for the user.** The scanner stops when the requested scope cannot be numbered and read coherently at the same time. Today that is one case: under `--scope staged`, a file that is staged *and has since been edited*. `git diff --cached` numbers the staged blob while every finding is read from the worktree, so continuing would drop findings in silence and later report them as fixed.
+
+Do not retry with a different flag to get past it, and do not report the run as clean. Surface it and let the user choose:
+
+- **Commit what is staged, then re-run.** The refusal carries a paste-ready line (`--scope branch --base <pre-commit sha>`) that reviews exactly what the commit contains.
+- **Review the staged and unstaged work together** with `--scope worktree`, if separating them was not the point.
+
+Name the blocking files — the message lists them — so the choice is concrete. Unattended, stop at the refusal and report it; do not pick a scope on the user's behalf, because the two answers review different code.
 
 **Two warnings are benign and must not be read as a failed scan.** A missing `--since` or `--declined` file warns `could not read … - ignoring it`; on a first run, or in any repo with no `declined.json` yet, that is the normal state and not a hole in the coverage. Guard them instead of passing them unconditionally:
 
@@ -492,6 +501,8 @@ esac
 **Diff to the worktree, not to `HEAD`, and this is the guard the `-s` check cannot give you.** The scanner reads every file from disk, so its findings, line numbers and anchors describe the working tree. A commit-to-commit `$BASE...HEAD` describes something else the moment the tree is dirty — which under `--scope branch` is most of the time, since that is what reviewing a branch you are still working on looks like. The agents then review a diff that omits changes the scanner scanned, while holding a JSON whose line numbers came from content the diff never showed. Both halves are silent: the `-s` check passes because the file is large, just wrong, and `SNAPSHOT` compares the tree against itself over time rather than `HEAD` against the worktree. Measured on this skill's own repo, the two forms differed by 4 KB and by whether the change under review appeared at all.
 
 Three dots is still right on the *base* side — it is the merge base, so commits that landed on the base after you branched do not appear as your changes. `git merge-base` gets that without pinning the head side to the last commit.
+
+The scanner resolves `--scope branch` the same way, for the same reason, so the two halves describe one tree. They did not always: the scanner pinned its head side to `HEAD` while the review input read the worktree, and a single uncommitted insert above a finding was enough to drop it from a `complete: true` report — then have the next `--since` run print it as resolved.
 
 For `--paths`, the input is the named files' full contents instead.
 

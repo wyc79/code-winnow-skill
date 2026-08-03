@@ -17,6 +17,26 @@ Generated code reaches for `?.` and `??` constantly because they are idiomatic C
 
 *Fix:* explicit `if (target != null)`. Flag every `?.` / `??` / `?[]` on a `MonoBehaviour`, `GameObject`, `Component`, `ScriptableObject`, or anything deriving from them. Plain C# objects are fine.
 
+## Never touch — attributes that bind a field outside this file
+
+**P1 / never touch.** Whole-file token counting cannot see a scene, a prefab, a serializer, a DI container, or the IL2CPP stripper. A field carrying any of these attributes is *referenced*, however unreferenced it looks — and every one of these failures is runtime-only or build-only, with a clean compile and a green unit suite.
+
+| Attribute | Reached by | Deleting it costs |
+|---|---|---|
+| `[SerializeField]`, `[SerializeReference]` | Unity serialization | every value already set in scenes and prefabs, silently |
+| `[FormerlySerializedAs]` | Unity serialization | the migration path for an already-renamed field |
+| `[Preserve]` | IL2CPP stripping | the member is stripped from release builds only |
+| `[RuntimeInitializeOnLoadMethod]`, `[InitializeOnLoad]`, `[InitializeOnLoadMethod]` | engine startup | the entry point never runs |
+| `[MenuItem]`, `[ContextMenu]`, `[ContextMenuItem]` | editor UI | the menu entry disappears |
+| `[Inject]` | Zenject / VContainer | a null dependency at runtime |
+| `[JsonProperty]`, `[JsonPropertyName]`, `[JsonInclude]`, `[DataMember]`, `[ProtoMember]`, `[XmlElement]` | serializers | the wire format changes; old payloads stop round-tripping |
+| `[DllImport]`, `[MonoPInvokeCallback]`, `[UnmanagedCallersOnly]` | native interop | the callback address or entry point is lost |
+| `[StructLayout]`, `[MarshalAs]`, `[FieldOffset]` | marshalling | the memory layout the native side expects |
+
+The scanner encodes this list in `EXPOSED`: a field carrying any of them is reported P3 with a confirm note, never as a delete instruction. The list is not exhaustive — an attribute you do not recognise is another ecosystem's version of the same thing, so treat an unrecognised attribute on a field as exposure and keep the field.
+
+**Engine-invoked methods always look unreferenced.** `Awake`, `Start`, `OnEnable`, `OnDisable`, `OnDestroy`, `OnValidate`, `OnTriggerEnter`, `OnCollisionEnter`, `OnApplicationPause` and the rest are called by name from native code; nothing in the file calls them. "No caller in this file" is not evidence about them. (An *empty* lifecycle method is still deletable — see below. The point here is that a non-empty one is live.)
+
 ## Per-frame cost
 
 **Empty lifecycle methods.** `void Start() { }`, `void Update() { }` left behind. Not free — Unity registers these by *declaration*, discovered when the script loads, and has no notion of an empty body. It crosses the native/managed boundary once per declared `Update` per frame regardless of what is inside, so an empty one on 500 objects is measurable. Delete them.
