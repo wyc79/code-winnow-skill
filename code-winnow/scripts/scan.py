@@ -68,15 +68,11 @@ READ_ERRORS = []
 
 # {path: {line}} - positions in the NEW file where the diff REMOVED content.
 #
-# Scope was decided by "is this finding's line one the diff added", which
-# cannot see a change that only takes lines away. Delete a test's only
-# assertion and every line that remains is untouched, so the now-assertionless
-# test is filed pre-existing and dropped from the default run: the diff
-# created a P1 and the scanner reported nothing. That is the headline case
-# this skill exists for.
-#
-# Accumulated like WARNINGS rather than threaded through resolve_diff's six
-# return points. Safe because each scan is its own process.
+# Scope keyed on added lines cannot see a deletion-only change: cut a test's
+# only assertion and every surviving line is untouched, so the assertionless
+# test files as pre-existing and never reports. Accumulated like WARNINGS
+# rather than threaded through resolve_diff's six return points - safe because
+# each scan is its own process.
 REMOVED_AT = defaultdict(set)
 
 # {path: [line]} for every file actually read this run, so anchor totals are
@@ -271,11 +267,9 @@ def in_scope(added):
     """Drop files with nothing in them, then add back the ones whose only
     change was a deletion.
 
-    A scope map keyed on added lines cannot represent "this file only lost
-    lines", so a deletion-only change resolved to an empty scope and the
-    scanner printed 'No diff found' on a tree with real uncommitted work.
-    Under `--scope auto` it was worse than a miss: the empty result fell
-    through to the branch diff and reviewed something else entirely.
+    A deletion-only change otherwise resolves to an empty scope, and under
+    `--scope auto` that is worse than a miss: the empty result falls through
+    to the branch diff and reviews something else entirely.
 
     The value stays an empty set - no line was added, and `added_lines` should
     say so. REMOVED_AT is what carries the change. See touches_change.
@@ -495,10 +489,8 @@ ANCHOR_MAX = 120
 
 
 def normalise_anchor(text):
-    """Collapse runs of whitespace, strip the ends, truncate.
-
-    SKILL.md tells the executor to apply exactly this before comparing a plan
-    anchor against a candidate line. It is one function here so the two
+    """SKILL.md tells the executor to apply exactly this before comparing a
+    plan anchor against a candidate line. It is one function here so the two
     definitions cannot drift: if they disagree, every moved fix reports stale
     and rule 2 of the locating ladder never runs.
     """
@@ -532,15 +524,18 @@ RE_PREPROCESSOR = re.compile(
     r"error|warning|region|endregion|line|nullable|import|using)\b")
 RE_SHEBANG = re.compile(r"^#!")
 RE_COMMENT = re.compile(
-    r"^\s*(?://+|\#+|/\*+|\*(?!/)|<!--|--(?!-))\s*(.+?)\s*(?:\*/|-->)?\s*$")
+    r"^\s*(?://+|\#+|/\*+|\*(?!/)|<!--)\s*(.+?)\s*(?:\*/|-->)?\s*$")
 
-# Comments a tool reads. They carry no prose, restate nothing, and contain no
-# "because" - so every rule this scanner has for comments votes to delete
-# them, and deleting one breaks a build or silently changes behaviour.
-#
-# `//go:embed templates/*` above `var templates embed.FS` was reported as
-# "comment restates the line below it" and handed to the agent that owns
-# comments, whose only verdicts are DELETE, KEEP and TIGHTEN.
+# `--` is a comment marker in SQL/Lua/Ada/Haskell and the pre-decrement operator
+# everywhere else. Applied universally it parsed `--Index;` in C++ and
+# `--remainingCharges;` in C# as restated comments, handing live code to the
+# comment deleter. Gated on extension: in .sql a restated comment is still one.
+RE_DASH_COMMENT = re.compile(r"^\s*--(?!-)\s*(.+?)\s*$")
+DASH_COMMENT_EXT = {".sql", ".lua", ".hs", ".ads", ".adb", ".vhd", ".vhdl"}
+
+# Comments a tool reads. They carry no prose and no "because", so every comment
+# rule here votes to delete them - `//go:embed templates/*` was reported as
+# restating the `var` below it. Deleting one breaks a build.
 RE_DIRECTIVE = re.compile(
     r"^\s*(?:"
     r"//\s*(?:go:\w+|nolint|NOLINT|NOSONAR|CHECKSTYLE|clang-format|"
@@ -561,15 +556,24 @@ def is_directive(text):
     return bool(RE_DIRECTIVE.match(text))
 
 
-def comment_body(text):
+def comment_body(text, dash_comments=False):
     """The prose inside a comment, or None. Preprocessor directives and tool
     directives are not comments, however much `#include` and `# noqa` look
-    like one to a regex."""
+    like one to a regex.
+
+    `dash_comments` opts a file into the `--` marker. It defaults to off
+    because the default is what every unrecognised language gets, and the
+    claimed three never use `--` as a comment - in two of them it is the
+    decrement operator. Guessing "comment" there turns code into a deletion
+    candidate; guessing "code" in a .sql file only costs a missed finding.
+    """
     if RE_PREPROCESSOR.match(text) or RE_SHEBANG.match(text):
         return None
     if is_directive(text):
         return None
     m = RE_COMMENT.match(text)
+    if not m and dash_comments:
+        m = RE_DASH_COMMENT.match(text)
     if not m:
         return None
     body = m.group(1).strip()
@@ -678,31 +682,20 @@ def docstring_lines(path, lines):
 def check_universal(path, lines, findings):
     is_test = bool(TEST_HINT.search(path))
     is_prose = os.path.splitext(path)[1].lower() in PROSE_EXT
+    dash_comments = os.path.splitext(path)[1].lower() in DASH_COMMENT_EXT
     docs = docstring_lines(path, lines)
     for idx in range(1, len(lines) + 1):
         text = lines[idx - 1]
-        body = comment_body(text)
+        body = comment_body(text, dash_comments)
         anchor = anchor_of(lines, idx)
 
         for ch, name in UNICODE_INVISIBLE.items():
             if ch in text:
-                # A non-breaking space or soft hyphen in a Markdown file is
-                # routine - pasted text, an option-space, a table alignment -
-                # and it sorted to the top of "P1 - Risk (behavior, security,
-                # test integrity)".
-                #
-                # A test file is the same case, and the demotion was wired to
-                # `local-path` and not to this rule: a suite that tests
-                # invisible-character handling reported a P1 for every fixture
-                # it needed to do so, including this skill's own. An i18n,
-                # encoding or security corpus does the same. So a test file
-                # demotes exactly as prose does.
-                #
-                # Bidi and invisible-identifier characters stay P1 in real
-                # source and in prose - a reader reviews the rendered form, so
-                # those are an attack there too - but drop one step, not two,
-                # inside a test, where the overwhelmingly likely reading is a
-                # fixture and the judgment pass still sees it.
+                # NBSP and soft hyphens are routine in prose, and in the
+                # fixtures of a suite that tests invisible-character handling -
+                # including this skill's own. Bidi and invisible-identifier
+                # characters are an attack in prose too (the reviewer reads the
+                # rendered form), so those drop one step in a test, not two.
                 soft = name in ("non-breaking space", "soft hyphen")
                 illustrative = is_prose or is_test
                 if soft and illustrative:
@@ -782,10 +775,8 @@ def check_python(path, lines, findings):
                 "f-string in logging call formats even when filtered out",
                 anchor)
         if RE_PY_TYPE_IGNORE.search(text):
-            # Say what the fix is, because the alternative reading - delete
-            # the comment - passes every check and fails the build under
-            # warn_unused_ignores, and this candidate is read by an agent
-            # whose verdicts are DELETE, KEEP and TIGHTEN.
+            # Name the fix: the other reading - delete the directive - passes
+            # every check and fails the build under warn_unused_ignores.
             add(findings, path, idx, "P2", "type-ignore",
                 "silences the checker rather than fixing the type - fix the "
                 "annotation; do not delete the directive", anchor)
@@ -1123,9 +1114,8 @@ def check_python_tests(path, tree, lines, findings):
         asserts = [n for n in ast.walk(fn) if _is_assert_call(n)]
         anchor = anchor_of(lines, fn.lineno)
 
-        # span: these findings are about the whole test body, so an edit
-        # anywhere inside it - including one that only deletes - is what
-        # caused them.
+        # span: the finding is about the whole test body, so a deletion inside
+        # it counts.
         body_end = getattr(fn, "end_lineno", None)
 
         if not asserts:
@@ -1759,7 +1749,7 @@ def _exposed_above(lines, idx, lookback=12):
 
     Track bracket and paren balance rather than matching each line's shape,
     for the reason `_has_uproperty_above` does the same: the verdict must not
-    depend on how the author wrapped their attributes. All four of these are
+    depend on how the author wrapped their attributes. All three of these are
     one serialized field to Unity, and every one of them must keep the P3
     "confirm before removing" note:
 
@@ -1774,14 +1764,10 @@ def _exposed_above(lines, idx, lookback=12):
          Range(0f, 1f)]                   wrapped attribute list
         private float speed;
 
-    A line-shape gate accepted only the first. The second was rejected as
-    "not an attribute line" while literally containing SerializeField, and
-    the wrapped form failed because its continuation line has no leading
-    bracket. Both fell back to P2 with no note - on the declarations this
-    must never advise deleting unchecked.
-
-    Walking upward while a bracket or paren group stays open keeps an
-    unrelated declaration two lines up from being read as decoration.
+    A line-shape gate accepts only the first, dropping the other two to P2
+    with no note - on exactly the declarations this must never advise deleting
+    unchecked. Walking upward while a bracket or paren group stays open also
+    keeps an unrelated declaration two lines up from reading as decoration.
     """
     pending = 0          # unmatched closing brackets seen so far, walking up
     for j in range(idx - 1, max(0, idx - 1 - lookback), -1):
@@ -1805,10 +1791,9 @@ def _exposed_above(lines, idx, lookback=12):
         closers = code.count("]") + code.count(")")
         openers = code.count("[") + code.count("(")
 
-        # This line decorates the declaration if we are inside an unclosed
-        # group, if it opens one, or if it closes more than it opens - the
-        # last being a wrapped continuation like `  Range(0f, 1f)]`, which
-        # starts with no bracket at all and used to end the walk immediately.
+        # `closers > openers` catches a wrapped continuation like
+        # `  Range(0f, 1f)]`, which starts with no bracket and would otherwise
+        # end the walk immediately.
         if not (pending > 0 or stripped.startswith("[") or closers > openers):
             return False                       # a declaration, not decoration
 
@@ -1913,28 +1898,12 @@ def number_occurrences(findings):
     """Stamp each finding with its 1-based index among its same-key siblings,
     counted in FILE ORDER.
 
-    `finding_key` excludes the line number on purpose, so N instances of one
-    constant-message rule in one file are indistinguishable by key alone. That
-    left `--declined` guessing which instance the user meant, and every guess
-    is wrong under a line shift: insert three lines above two instances and
-    "nearest recorded line" picks the other one.
-
-    **Sorting by line is what makes this correct, and it was not free.** The
-    Python rules emit through `ast.walk`, which is breadth-first, so findings
-    arrive in AST-depth order, not file order:
-
-        four handlers at lines 4, 9, 15, 19  ->  emitted 19, 4, 9, 15
-
-    Numbering them as they arrived gave occurrence 1 to the *last* one in the
-    file. Two consequences, both silent. `--declined` suppressed a finding the
-    user never saw while the one they declined kept returning. And SKILL.md
-    tells the executor to count anchor matches top-to-bottom, so the plan's
-    `occurrence:` and the executor's count referred to different things - the
-    document calls a fix applied to the wrong line the worst outcome available
-    in this skill, and this produced exactly that.
-
-    File order is also the only ordering a human or an executing agent can
-    reproduce by reading the file, which is the property the field needs.
+    `finding_key` excludes the line number, so N instances of one rule in one
+    file are indistinguishable by key alone and `--declined` had to guess.
+    Sorting by line is not cosmetic: the Python rules emit through `ast.walk`
+    (breadth-first), so arrival order gave occurrence 1 to the last match in
+    the file - while SKILL.md tells the executor to count anchor matches top
+    to bottom. File order is also the only ordering a reader can reproduce.
     """
     by_key = defaultdict(list)
     for f in findings:
@@ -1948,20 +1917,13 @@ def number_anchor_matches(findings):
     """Stamp `anchor_index` / `anchor_total`: where this finding's line sits
     among the lines of its file that match the anchor, and how many there are.
 
-    **This is a different population from `occurrence` and conflating them
-    edits the wrong line.** `occurrence` counts findings that share a key, so
-    a diff-scoped run numbering the single instance the change touched stamps
-    1 - even when the anchor text is on three lines and the flagged one is the
-    third. The Step 4b executor locates a moved fix by counting matching
-    *lines*, top to bottom, so it needs the textual ordinal and the textual
-    total. Given the flagged index instead, it edits the first match: code the
-    diff never touched, no agent reviewed, and the user never approved.
-
-    The total is the half that makes the ordinal safe. Two matches at plan
-    time and one now means something was deleted; three means something was
-    added. Either way the ordinal no longer identifies what it identified,
-    and the item is stale - which costs a re-run, against a wrong-line edit
-    that costs a deletion nobody approved.
+    A different population from `occurrence`, which counts findings sharing a
+    key: a diff-scoped run stamps 1 on the only flagged instance even when the
+    anchor is on three lines and it is the third. The executor counts matching
+    lines, so handed the flagged index it edits the first match - code nobody
+    reviewed or approved. The total is what makes the ordinal safe: any change
+    in it means the ordinal no longer identifies what it did, so the item is
+    stale, which costs a re-run rather than a wrong-line edit.
     """
     for f in findings:
         anchor = f.get("anchor") or ""
@@ -1990,30 +1952,22 @@ def split_declined(findings, declined_path):
     A punch list that keeps re-raising settled items trains the reader to
     skim, and then they skim past the P1 too.
 
-    Matching is per instance, and picks the instance by nearest line.
+    Matching is per instance: by `occurrence` when the declined entry carries
+    one, falling back to nearest line for files written before it existed.
 
-    Two ways this went wrong before. `finding_key` deliberately excludes the
-    line number so a decline survives the shifts that deleting other findings
-    causes, and most rules emit a constant message - so N occurrences of one
-    rule in one file share a key. A set-membership test therefore declined all
-    N once the user declined any one of them, including occurrences written
-    *later*: decline a single `except Exception: pass` and every other one in
-    that file, forever after, silently never reaches the report.
-
-    Counting instances fixed that and introduced a quieter fault - the budget
-    was spent in file order, so declining the finding at line 9 silenced the
-    one at line 4 instead. The user's finding stayed live and a different live
-    P1 vanished from every report. `line` is excluded from the *key* but is
-    still the best available hint about *which* instance was meant, so use it
-    to choose among candidates that already matched on all four key fields.
-    Entries with no usable `line` fall back to file order.
+    Per instance, not per key. `finding_key` excludes the line number so a
+    decline survives line shifts, and most rules emit a constant message, so N
+    occurrences in one file share a key: a set-membership test declines all N
+    once the user declines any one - including occurrences written later.
+    Counting alone is not enough either, since spending the budget in file
+    order silences the instance at line 4 when the user declined line 9. So
+    `line` picks among candidates that already matched all four key fields;
+    entries with no usable `line` fall back to file order.
     """
     prior = load_report(declined_path, "--declined")
     if prior is None:
         return findings, []
 
-    # Candidates live per key, in file order, so a decline can pick the
-    # instance the user meant rather than whichever came first.
     by_key = defaultdict(list)
     for i, f in enumerate(findings):
         by_key[finding_key(f)].append(i)
@@ -2099,9 +2053,8 @@ def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
     lines = read_lines(path)
     if lines is None:
         return None
-    # Kept for number_anchor_matches, which counts how many lines of the file
-    # match each anchor. Re-reading the file there would let the two counts be
-    # taken against different bytes if the tree moved mid-scan.
+    # Snapshot for number_anchor_matches: re-reading there could see different
+    # bytes if the tree moved mid-scan.
     FILE_LINES[path] = lines
     ext = os.path.splitext(path)[1].lower()
     check_universal(path, lines, findings)

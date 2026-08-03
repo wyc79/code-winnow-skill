@@ -102,7 +102,7 @@ The severity split matters for the floor below: when it says a P1 cannot be dism
 
 Test findings follow the same severity scale as everything else:
 
-- **P1** — a test that cannot fail, asserts nothing, or asserts only about a double. These are not weak tests, they are false coverage, and false coverage is what lets a real bug ship.
+- **P1** — a test that cannot fail, asserts nothing, or asserts only about a double. These are not weak tests, they are false coverage, and false coverage is what lets a real bug ship. **The scanner files two of these at P2 outside Python** — see the reach table above. The floor is about the defect, not the label.
 - **P2** — structural duplicates, unused fixtures, over-mocking.
 - **P3** — unexplained skips, naming, ceremony.
 

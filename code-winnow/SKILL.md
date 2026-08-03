@@ -111,6 +111,8 @@ The scanner also hard-skips its own workspace directory, so a run started before
 
 Let the scanner do it. `--scope auto` (the default) takes the **union of all uncommitted work**: staged, unstaged, and untracked files. If the working tree is clean it falls back to the branch diff against a discovered base.
 
+**On the base branch itself, that fallback is correctly empty** — `main` diffed against `main` is nothing, so a clean tree on `main` yields no stem and no scope. That is not a broken setup and not a clean bill of health; it means you have to say what to compare against. Pass `--base <ref>`, or name the commit the work started from. This is the first thing to check when a run reports nothing, because it looks exactly like a clean tree from every field in the output.
+
 ```bash
 cd "$(git rev-parse --show-toplevel)"
 WINNOW="<absolute path to this skill's directory>"   # QUOTE IT — see below
@@ -335,8 +337,13 @@ done
 
 STEM=$("$PY" "$WINNOW/scripts/scan.py" $SCOPE --report-name) || STEM=""
 [ -n "$STEM" ] || {
-  echo "no stem. Either the scope is empty (nothing to review), or \$PY/\$WINNOW"
-  echo "are wrong — check both before concluding the tree is clean."; exit 0; }
+  echo "no stem. Three causes, in the order they actually happen:"
+  echo "  1. the tree is clean AND you are on the base branch, so auto's"
+  echo "     branch fallback has nothing to diff — pass --base <ref> to name"
+  echo "     what to compare against. \`git branch --show-current\` tells you."
+  echo "  2. the scope really is empty — nothing to review."
+  echo "  3. \$PY or \$WINNOW is wrong."
+  echo "Check 1 first; it looks identical to a clean tree and is not."; exit 0; }
 
 # One definition point for every later block. Written fresh each run.
 # The function goes IN the file: it is needed in later shells, and a shell
@@ -421,13 +428,22 @@ cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
 SRC=$("$PY" "$WINNOW/scripts/scan.py" $SCOPE --json \
       | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["scope"])')
 case "$SRC" in
-  branch*) BASE=${SRC#branch vs }; RANGE="$BASE...HEAD" ;;
+  # Merge base, NOT `$BASE...HEAD`. Three dots is the right BASE side and the
+  # wrong HEAD side: it pins the comparison to the last commit, while the
+  # scanner reads every file from disk. Diff from the merge base to the
+  # WORKTREE and both describe the same bytes.
+  branch*) BASE=${SRC#branch vs }; RANGE=$(git merge-base "$BASE" HEAD) ;;
   *)       RANGE="" ;;
 esac
 
 {
   if [ -n "$RANGE" ]; then
-    git diff "$RANGE"
+    git diff "$RANGE"                                # base..worktree
+    git ls-files --others --exclude-standard -z |
+      while IFS= read -r -d '' f; do
+        case "$f" in .code-winnow/*) continue ;; esac
+        printf '\n--- NEW FILE: %s ---\n' "$f"; cat "$f"
+      done
   else
     git diff HEAD 2>/dev/null || git diff --cached   # unborn HEAD: no commit yet
     git ls-files --others --exclude-standard -z |
@@ -441,6 +457,10 @@ esac
 [ -s ".code-winnow/$STEM.input.diff" ] || {
   echo "review input is empty but the scanner found files — do NOT dispatch"; exit 1; }
 ```
+
+**Diff to the worktree, not to `HEAD`, and this is the guard the `-s` check cannot give you.** The scanner reads every file from disk, so its findings, line numbers and anchors describe the working tree. A commit-to-commit `$BASE...HEAD` describes something else the moment the tree is dirty — which under `--scope branch` is most of the time, since that is what reviewing a branch you are still working on looks like. The agents then review a diff that omits changes the scanner scanned, while holding a JSON whose line numbers came from content the diff never showed. Both halves are silent: the `-s` check passes because the file is large, just wrong, and `SNAPSHOT` compares the tree against itself over time rather than `HEAD` against the worktree. Measured on this skill's own repo, the two forms differed by 4 KB and by whether the change under review appeared at all.
+
+Three dots is still right on the *base* side — it is the merge base, so commits that landed on the base after you branched do not appear as your changes. `git merge-base` gets that without pinning the head side to the last commit.
 
 For `--paths`, the input is the named files' full contents instead.
 
@@ -708,7 +728,7 @@ Every count in that header comes out of the JSON: `files`, `scanned_files`, `add
 
 Severity:
 
-- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode (zero-width, non-breaking, bidi — *not* a leading BOM), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, machine names or secrets
+- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode in real source (zero-width, non-breaking, bidi — *not* a leading BOM; inside a test or prose file the scanner demotes these to P2, or P3 for a non-breaking space or soft hyphen), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, machine names or secrets
 - **P2** — speculative abstraction, defensive checks in trusted paths, unused fields, duplicated helpers, dead scaffolding, config knobs nothing sets, structurally duplicate tests, unused fixtures, `except SpecificError: pass`, `/home/...` paths
 - **P3** — comments restating code, generic naming, formatting churn on untouched lines, em dashes and smart quotes *in code* (the scanner exempts comments, docstrings and prose files; it does **not** exempt string literals, so leave typography alone in localized and user-facing strings yourself)
 

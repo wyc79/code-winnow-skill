@@ -1,16 +1,17 @@
+#!/usr/bin/env python3
 """Mutation check: does each test actually fail when its fix is removed?
 
 A passing test proves nothing on its own. Twelve parametrized tests here once
 asserted that directive comments are exempt from the comment rules, and all
-twelve passed with the exemption stubbed out — the fixture could not trigger
+twelve passed with the exemption stubbed out - the fixture could not trigger
 those rules either way. They also asserted against two rule names that do not
 exist in the scanner. The suite was green and the feature was unverified.
 
 This script breaks each fix in turn and requires the matching tests to fail.
 A mutation that leaves the suite green means the tests are not pinning it.
 
-    python tests/check_mutations.py            # all mutations
-    python tests/check_mutations.py declined   # substring filter
+    python3 tests/check_mutations.py           # all mutations
+    python3 tests/check_mutations.pydeclined   # substring filter
 
 Slow (one pytest run per mutation), so it is not part of the default suite.
 Run it whenever you add a regression test, and before believing one.
@@ -20,7 +21,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
@@ -63,9 +63,9 @@ MUTATIONS = [
      "trojan or bidi or unicode"),
 
     ("prose-nbsp-demotion", SCAN,
-     '                sev = "P3" if (is_prose and soft) else "P1"',
-     '                sev = "P1"',
-     "nbsp or prose"),
+     '                if soft and illustrative:',
+     '                if False:',
+     "nbsp or prose or invisible_character"),
 
     # A file that only lost lines has no entry in a map keyed on additions,
     # so the scan reports "No diff found" on a tree with real work.
@@ -83,7 +83,7 @@ MUTATIONS = [
     ("deletion-span-attribution", SCAN,
      "    return any(n in added or n in removed_at for n in range(lo, hi + 1))",
      "    return lo in added",
-     "deletes_an_assertion or never_touched"),
+     "never_touched"),
 
     # Revert the approval gate to the fail-OPEN form it shipped with: refuse
     # only what explicitly says UNAPPROVED. A plan with no Status line then
@@ -106,9 +106,9 @@ if not m.group(1).upper().startswith("APPROVED"):
 ]
 
 
-def run(argv, cwd=None, env=None):
+def run(argv, cwd=None):
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", env=env)
+                          encoding="utf-8", errors="replace")
 
 
 def main():
@@ -118,7 +118,7 @@ def main():
 
     base = run([sys.executable, "-m", "pytest", "tests/", "-q"], cwd=WINNOW)
     if base.returncode != 0:
-        print("BASELINE SUITE IS RED — fix that first")
+        print("BASELINE SUITE IS RED - fix that first")
         print(base.stdout[-2000:])
         return 1
     print(f"baseline: {base.stdout.strip().splitlines()[-1]}\n")
@@ -151,7 +151,9 @@ def main():
 
     print()
     if failures:
-        print(f"{len(failures)} mutation(s) survived — those tests verify nothing:")
+        print(f"{len(failures)} mutation(s) unaccounted for - a surviving "
+              "mutation means those tests verify nothing; one that no longer "
+              "applies means this script is stale:")
         for f in failures:
             print(f"  - {f}")
         return 1

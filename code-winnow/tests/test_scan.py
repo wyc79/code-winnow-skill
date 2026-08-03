@@ -130,38 +130,21 @@ def test_a_deletion_only_change_is_not_an_empty_scope(repo):
         + repr(data["warnings"]))
 
 
-def test_a_diff_that_only_deletes_an_assertion_still_reports_the_test(repo):
-    """Scope was 'is this finding's line one the diff added', which no
-    deletion-only edit can satisfy. Removing a test's only assertion leaves
-    every surviving line untouched, so the now-assertionless test was filed
-    pre-existing and dropped: the change created a P1 and the scan printed
-    nothing. That is this skill's headline case."""
+def test_a_test_the_diff_never_touched_stays_pre_existing(repo):
+    """Both halves of span attribution, which no deletion-only edit could
+    satisfy when scope was 'is this line one the diff added'.
+
+    Positive: removing `test_alpha`'s only assertion leaves every surviving
+    line untouched, so the assertionless test used to file as pre-existing and
+    drop - the change created a P1 and the scan printed nothing, this skill's
+    headline case. Negative: `test_beta` was committed assertion-free and the
+    diff does not reach it, so attributing by span must still leave it out
+    rather than turning every edited file into a repo audit."""
     write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "suite")
 
     write(repo, "tests/test_x.py",                      # only the assert goes
-          "def test_alpha():\n"
-          "    result = compute()\n"
-          "\n"
-          "\n"
-          "def test_beta():\n"
-          "    compute()\n")
-
-    found = rules(str(repo))
-    assert 1 in found.get("test-without-assertion", []), (
-        "deleting a test's only assertion produced no finding: " + repr(found))
-
-
-def test_a_test_the_diff_never_touched_stays_pre_existing(repo):
-    """The negative control. Attributing by span must not turn every edited
-    file into a repo audit - `test_beta` was committed assertion-free and the
-    diff does not reach it, so it stays out of the default run."""
-    write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
-    git(repo, "add", "-A")
-    git(repo, "commit", "-qm", "suite")
-
-    write(repo, "tests/test_x.py",
           "def test_alpha():\n"
           "    result = compute()\n"
           "\n"
@@ -747,14 +730,13 @@ def test_directive_comments_are_not_comment_candidates(tmp_path, line, body, lan
 
 def test_the_directive_fixtures_would_actually_fire_without_the_exemption(tmp_path):
     """Guards the guard: proves the fixtures above can trigger the rule, so a
-    future edit cannot quietly make them vacuous again. `strip_code` is what
-    the exemption routes around, so bypassing `is_directive` must produce the
-    finding the exemption exists to suppress."""
+    future edit cannot quietly make them vacuous again. `is_directive` is the
+    exemption, checked inside `comment_body` ahead of `RE_COMMENT`, so the same
+    text without it must produce the finding the exemption exists to suppress."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("scanmod", SCAN)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    # With the directive recognised, it is not comment prose.
     assert mod.comment_body("//go:embed templates") is None
     # The same text, if it were NOT a directive, is comment prose - which is
     # what feeds restated-comment.
@@ -781,8 +763,8 @@ def test_nbsp_in_prose_is_not_a_p1_but_bidi_still_is(tmp_path):
     """An NBSP in Markdown is routine - pasted text, an option-space, table
     alignment - and it sorted to the top of 'P1 - Risk'. A bidi control in
     prose is still an attack, because the reviewer reads the rendered form."""
-    write(tmp_path, "doc.md", "# Guide\n\nA line with a non-breaking space.\n")
-    write(tmp_path, "evil.md", "# Guide\n\nA‮line with an override.\n")
+    write(tmp_path, "doc.md", "# Guide\n\nA\u00a0line with a non-breaking space.\n")
+    write(tmp_path, "evil.md", "# Guide\n\nA\u202eline with an override.\n")
     soft = json.loads(run(str(tmp_path), "--json", "--paths", "doc.md").stdout)
     hard = json.loads(run(str(tmp_path), "--json", "--paths", "evil.md").stdout)
     assert [f["severity"] for f in soft["findings"]
@@ -837,6 +819,51 @@ def test_occurrence_is_numbered_in_file_order_not_ast_order(tmp_path):
     assert lines == sorted(lines), (
         f"occurrence order {lines} is not file order - the executor counts "
         "anchor matches top to bottom and would edit a different line")
+
+
+def test_pre_decrement_is_not_read_as_a_comment(tmp_path):
+    """`--` is the SQL/Lua line-comment marker and was in the universal comment
+    pattern, so line-leading `--x;` in C# and C++ - two of the three languages
+    this skill claims - parsed as a comment. It reached the report as
+    `restated-comment`, which Step 3 routes to the agent whose verdicts are
+    DELETE / KEEP / TIGHTEN. Deleting a decrement compiles clean."""
+    write(tmp_path, "Charges.cs",
+          "public class Charges : MonoBehaviour\n{\n"
+          "    private int remainingCharges = 3;\n\n"
+          "    public void Consume()\n    {\n"
+          "        --remainingCharges;\n"
+          "        remainingCharges = Mathf.Max(0, remainingCharges);\n"
+          "    }\n}\n")
+    write(tmp_path, "Loop.cpp",
+          "void UWidget::Drain()\n{\n"
+          "    --Index;\n"
+          "    Index = FMath::Max(0, Index);\n}\n")
+    for f in ("Charges.cs", "Loop.cpp"):
+        found = rules(str(tmp_path), "--paths", f)
+        assert "restated-comment" not in found, (
+            f"{f}: pre-decrement reported as a comment restating the line below")
+
+
+def test_long_cli_flag_in_prose_is_not_read_as_a_comment(tmp_path):
+    """The same pattern read a shell continuation line in a fenced block as a
+    comment - found by running this skill on its own SKILL.md, where
+    `--since ...` inside the Step 6 block was reported as restated prose."""
+    write(tmp_path, "guide.md",
+          "# Guide\n\n```bash\n"
+          "scan.py --stem \"$STEM-postfix\" --json \\\n"
+          "  --since \".code-winnow/$STEM.json\" \\\n"
+          "  > \".code-winnow/$STEM-postfix.json\"\n"
+          "```\n")
+    assert "restated-comment" not in rules(str(tmp_path), "--paths", "guide.md")
+
+
+def test_sql_dash_comment_is_still_a_comment(tmp_path):
+    """The gate keeps recognition where `--` genuinely is a comment marker.
+    Removing it outright would have been the smaller change and the wrong one:
+    a restated comment in a .sql file is still a restated comment."""
+    write(tmp_path, "migrate.sql",
+          "-- update the counter\nUPDATE counter SET n = n + 1;\n")
+    assert "restated-comment" in rules(str(tmp_path), "--paths", "migrate.sql")
 
 
 def test_anchor_total_counts_matching_lines_not_flagged_findings(repo):

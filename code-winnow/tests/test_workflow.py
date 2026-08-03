@@ -99,7 +99,7 @@ def bash_path():
         shutil.which("bash"),
     ]
     for c in candidates:
-        if not c or not (os.path.isfile(c) or shutil.which(c)):
+        if not c or not os.path.isfile(c):
             continue
         probe = subprocess.run(
             [c, "-c", 'cd "$(git rev-parse --show-toplevel)" && pwd'],
@@ -134,7 +134,7 @@ def run_block(body, cwd, subs=None):
     body = f'PY={_bash_py()}\n' + body
     # encoding pinned: `text=True` decodes through the locale codec, so on a
     # GBK/cp1252 machine any non-ASCII byte in git's output raises instead of
-    # testing anything. test_scan.py:50 learned this once already.
+    # testing anything. test_scan.py's `write` helper learned this once already.
     proc = subprocess.run([BASH, "-c", body], cwd=cwd, capture_output=True,
                           text=True, encoding="utf-8", errors="replace")
     return proc
@@ -147,10 +147,9 @@ def run_block(body, cwd, subs=None):
 def test_every_bash_block_is_run_or_explicitly_marked_illustrative():
     """A block that is neither exercised nor labelled is how an untested
     snippet enters the document. Adding one must break this test."""
-    spine_markers = [m for _, m in SPINE]
     unaccounted = []
     for ln, section, body in _bash_blocks():
-        if any(m in body for m in spine_markers):
+        if any(m in body for _, m in SPINE):
             continue
         if re.search(r"^\s*#\s*(illustration|flag reference|pattern)", body, re.I | re.M):
             continue
@@ -158,7 +157,9 @@ def test_every_bash_block_is_run_or_explicitly_marked_illustrative():
     assert not unaccounted, (
         "bash blocks neither run by the harness nor marked illustrative:\n  "
         + "\n  ".join(unaccounted)
-        + "\n\nAdd the block to SPINE, or give it a first-line comment "
+        + "\n\nAdd the block to SPINE (steps covered: "
+        + ", ".join(name for name, _ in SPINE)
+        + "), or give it a first-line comment "
           "'# illustration only - not run by the harness'.")
 
 
@@ -326,6 +327,55 @@ def test_review_input_on_a_clean_tree_branch_review(tmp_path):
     assert diffs and diffs[0].stat().st_size > 0, (
         "clean-tree branch review produced an empty review input - the agents "
         "would report nothing while the scanner holds findings")
+
+
+@requires_bash
+def test_review_input_on_a_branch_review_includes_uncommitted_work(tmp_path):
+    """The builder resolved `$BASE...HEAD`, a commit-to-commit diff, while the
+    scanner reads every file from disk. On a dirty tree under a branch review
+    the agents were handed a diff that omitted changes the scanner had scanned,
+    and held a JSON whose line numbers came from content the diff never showed.
+
+    Neither existing guard catches it: the `-s` check passes because the file
+    is large, just wrong, and SNAPSHOT compares the tree to itself over time
+    rather than HEAD to the worktree. Found by running this skill on itself.
+    """
+    def git(*a):
+        subprocess.run(["git", *a], cwd=tmp_path, capture_output=True, check=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t.t")
+    git("config", "user.name", "t")
+    (tmp_path / "seed.txt").write_text("seed\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    git("checkout", "-qb", "feat")
+    (tmp_path / "feature.py").write_text(
+        "def load():\n    try:\n        go()\n    except Exception:\n        pass\n",
+        encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "work")
+    # ...and now work that is NOT committed, which the scanner will read.
+    (tmp_path / "feature.py").write_text(
+        "def load():\n    try:\n        go()\n    except Exception:\n        pass\n"
+        "\n\ndef UNCOMMITTED_MARKER():\n    unused_local = 1\n    return 2\n",
+        encoding="utf-8")
+
+    run_block(_find_block("EXCLUSION FAILED")[2], str(tmp_path))
+    # An explicit branch scope is the case: `auto` on a dirty tree resolves to
+    # worktree and never reaches the branch path, so the mismatch only appears
+    # when the reviewer names the scope - which is what reviewing a branch means.
+    subs = {"<absolute path to this skill's directory>": WINNOW,
+            'SCOPE=""': 'SCOPE="--scope branch --base main"'}
+    run_block(_find_block("# QUOTE IT")[2], str(tmp_path), subs)
+    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(tmp_path), subs)
+    run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(tmp_path))
+
+    diffs = list((tmp_path / ".code-winnow").glob("*.input.diff"))
+    assert diffs, "no input.diff written"
+    text = diffs[0].read_text(encoding="utf-8", errors="replace")
+    assert "UNCOMMITTED_MARKER" in text, (
+        "the review input omits uncommitted work the scanner scanned - the "
+        "agents review one tree while the JSON describes another")
 
 
 # --------------------------------------------------------------------------
