@@ -839,6 +839,87 @@ def test_occurrence_is_numbered_in_file_order_not_ast_order(tmp_path):
         "anchor matches top to bottom and would edit a different line")
 
 
+def test_anchor_total_counts_matching_lines_not_flagged_findings(repo):
+    """`occurrence` indexes findings that share a key. The Step 4b executor
+    counts matching LINES in the file, which is a different population: a
+    diff-scoped scan flags only the instance the change touched, while the
+    anchor text may appear anywhere.
+
+    SKILL.md used to say `occurrence` was already in the JSON and could be
+    copied into the plan. It could not. Copying a flagged-index of 1 into a
+    field the executor reads as "the first matching line" sent a moved fix to
+    an untouched, unreviewed, unapproved line - which this skill calls the
+    worst outcome available in it."""
+    body = ("def a():\n    try:\n        one()\n    except Exception:\n        pass\n"
+            "\ndef b():\n    try:\n        two()\n    except Exception:\n        pass\n")
+    write(repo, "app.py", body)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    write(repo, "app.py", body +
+          "\ndef c():\n    try:\n        three()\n    except Exception:\n        pass\n")
+
+    data = json.loads(run(str(repo), "--json").stdout)
+    hits = [f for f in data["findings"] if f["rule"] == "swallowed-exception"]
+    assert len(hits) == 1, "only the added block is in a diff-scoped run"
+    f = hits[0]
+    assert f["occurrence"] == 1, "one flagged instance, so the key-index is 1"
+    assert f["anchor_total"] == 3, (
+        "the anchor text is on three lines of the file; the executor will "
+        "count three and must be told to expect three")
+    assert f["anchor_index"] == 3, (
+        f"the flagged line is the third match, not the {f['occurrence']}st - "
+        "these two fields must never be conflated")
+
+
+def test_anchor_index_and_total_agree_with_the_executors_normalisation(tmp_path):
+    """The executor compares whitespace-normalised lines. Indentation must
+    not split one anchor into two, or the count it reaches disagrees with the
+    count the plan recorded and every moved item reports stale."""
+    write(tmp_path, "app.py",
+          "def a():\n    try:\n        go()\n    except Exception:\n        pass\n"
+          "\nclass K:\n    def b(self):\n        try:\n            go()\n"
+          "        except Exception:\n            pass\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "app.py").stdout)
+    hits = sorted([f for f in data["findings"]
+                   if f["rule"] == "swallowed-exception"],
+                  key=lambda f: f["line"])
+    assert len(hits) == 2
+    assert [f["anchor_index"] for f in hits] == [1, 2]
+    assert [f["anchor_total"] for f in hits] == [2, 2], (
+        "differently-indented copies of one line are one anchor after "
+        "normalisation")
+
+
+def test_invisible_character_in_a_test_fixture_is_not_a_p1(tmp_path):
+    """A path-handling test gets `local-path` demoted one step because the
+    path is data, not a leak. A detector's own fixture is data in exactly the
+    same way, and the demotion was never wired to it - so this skill's own
+    suite reported two P1s against the lines that test invisible-character
+    detection. P1 is the one bucket the report rules say never to cut."""
+    write(tmp_path, "tests/test_encoding.py",
+          "def test_nbsp_is_flagged():\n"
+          "    assert scan('a\u00a0b')\n"
+          "def test_rlo_is_flagged():\n"
+          "    assert scan('a\u202eb')\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths",
+                          "tests/test_encoding.py").stdout)
+    sevs = sorted(f["severity"] for f in data["findings"]
+                  if f["rule"] == "unicode-invisible")
+    assert sevs == ["P2", "P3"], (
+        f"expected the soft character demoted to P3 and the bidi override to "
+        f"P2 in a test file, got {sevs}")
+
+
+def test_invisible_character_in_production_code_is_still_a_p1(tmp_path):
+    """The demotion above is keyed on the file being a test or prose. Real
+    source keeps the full severity - this is the finding the rule exists for."""
+    write(tmp_path, "app.py", "x = 'a\u00a0b'\ny = 'a\u202eb'\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "app.py").stdout)
+    sevs = {f["severity"] for f in data["findings"]
+            if f["rule"] == "unicode-invisible"}
+    assert sevs == {"P1"}, sevs
+
+
 def test_a_plain_private_field_still_has_no_confirm_note(tmp_path):
     """The attribute walk must not turn every field into an exposed one - a
     preceding ordinary comment is not an attribute block."""

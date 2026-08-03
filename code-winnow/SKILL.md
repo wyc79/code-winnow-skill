@@ -1,11 +1,13 @@
 ---
 name: code-winnow
-description: Use when the user wants generated-code chaff removed from an uncommitted change or a branch — "winnow", "de-slop", "deslop", "clean this up before I commit", "does this look AI-written", "make this idiomatic", "cut the slop" — or is about to open a PR on agent-written code, or a large generated change just landed. Scopes to one named feature. Also resumes an approved cleanup: "apply the fix plan", "code-winnow: apply <path>.fixplan.md", without re-reviewing. Covers generated tests (assertion-free, tautological, mock-only, duplicate) across pytest, NUnit/xUnit/MSTest, JUnit, GoogleTest, Go, Jest/Vitest, Rust, RSpec, XCTest, plus docs and file headers the change made false. Not for general code review, bug hunts, or security audits — it removes chaff, not defects. Verified for Python, C#/Unity and C++/UE5; best-effort elsewhere, keeping what it cannot identify. Needs Python 3.9+ and git; writes reports and a fix plan under `.code-winnow/`, git-excludes that path, and backs up every file it edits first.
+description: Use when the user wants generated-code chaff removed from an uncommitted change or a branch — "winnow", "de-slop", "deslop", "clean this up before I commit", "does this look AI-written", "make this idiomatic", "cut the slop" — or is about to open a PR on agent-written code, or a large generated change just landed. Also use when asked to apply or resume an approved cleanup: "apply the fix plan", "code-winnow: apply <path>.fixplan.md". Covers code, comments, docstrings, generated tests, file headers, and docs the change made false. Not for general code review, bug hunts, or security audits — it removes chaff, not defects.
 ---
 
 # Code-winnow
 
 Generated code fails review in predictable ways. It is rarely wrong; it is bloated, over-defensive, and stylistically foreign to the repo it landed in. Linters catch the subset that is a rule violation. The rest is judgment, and that is the gap this skill fills — winnowing, in the old sense: keep the grain, blow off the chaff.
+
+**Needs Python 3.9+ and git.** It writes reports, a fix plan and file backups under `.code-winnow/`, and git-excludes that path in Step 0. Companion skills are optional; `$WINNOW/references/portability.md` has the degraded paths.
 
 > **Were you invoked to apply a fix plan?** If the request names a `.code-winnow/*.fixplan.md`, or asks to apply or resume an approved cleanup, go straight to **"Entering at Step 5 cold"** near the end of this file. Re-run Step 0 — it is idempotent and it verifies — then skip Steps 1 through 4b entirely. The review already happened; re-running it wastes the context the plan exists to save and re-opens decisions the user already made.
 
@@ -56,11 +58,11 @@ A scheduled run, a headless runtime, piped stdin, CI, or a user who has already 
 | Unify file headers (Step 4) | **No.** Report the conflict, change nothing. A header carries a license claim, and asserting one on the user's behalf is not a call to take in their absence. |
 | Apply the fixes (Step 5) | **No. Never.** Stop after Step 4b, write the report and the fix plan marked `Status: UNAPPROVED`, and say the run ended there because nobody was there to approve. |
 
-**One carve-out, and only this one:** a run invoked as `code-winnow: apply <plan>.fixplan.md` *is* Step 5, and it may run unattended — against a plan a human already approved. The approval happened when the plan was written; demanding it again in the session that merely executes would make the clear-and-resume path impossible. A plan marked `UNAPPROVED` is refused there, which is what stops this carve-out from swallowing the row above it.
+**The last row is not a default that a reading of "do not block" can override.** An unattended run **never edits a file**, because the default scope includes untracked files that git cannot restore. A run that stalls waiting on a question has failed; a run that silently deleted lines from files with no object-store copy has failed worse and quietly.
 
-The feature row goes wide rather than guessing narrow because the two failures are not symmetrical. Reviewing more than was asked is visible in the report and costs the reader a scroll. Reviewing the wrong three files and reporting full confidence is silent, and the user has no way to notice.
+**One carve-out, and only this one:** a run invoked as `code-winnow: apply <plan>.fixplan.md` *is* Step 5, and it may run unattended — against a plan a human already approved. Demanding approval again in the session that merely executes would make the clear-and-resume path impossible. A plan marked `UNAPPROVED` is refused there, which is what stops the carve-out from swallowing the row above it.
 
-That last row is not a default that a reading of "do not block" can override. An unattended run **never edits a file**, and the reason is Step 5a: the default scope includes untracked files, which git cannot restore. A run that stalls waiting on a question has failed; a run that silently deleted lines from files with no object-store copy has failed worse and quietly.
+The feature row goes wide rather than guessing narrow because the two failures are not symmetrical: reviewing more than was asked costs the reader a scroll, while reviewing the wrong three files and reporting full confidence is silent.
 
 ## Companion skills
 
@@ -93,15 +95,15 @@ git check-ignore -q .code-winnow/ \
 
 **Verify, do not assume.** If that last line prints the failure, stop and tell the user. Every later step writes into `.code-winnow/`, and an unexcluded workspace means the judgment agents are handed your own reports and backups as review input, and `git add -A` commits them — on a run whose headline trigger is "clean this up before I commit".
 
-Three things in that block are load-bearing, and each replaced something that looked right and was not:
+Three things in that block are load-bearing, and each has a near-miss that looks right:
 
-**`--git-common-dir`, not `--git-dir`.** Git reads `info/exclude` from the *common* directory. In a linked worktree `--git-dir` returns `.git/worktrees/<name>/`, and a rule written there is silently ignored — `git check-ignore` still says not-ignored. Worktrees are exactly where a reviewer works on a branch in parallel, so the one setup this most needs to handle was the one it silently failed. (Submodules are fine either way: git-dir and common-dir are the same there.)
+**`--git-common-dir`, not `--git-dir`.** Git reads `info/exclude` from the *common* directory. In a linked worktree `--git-dir` returns `.git/worktrees/<name>/`, a rule written there is silently ignored, and `git check-ignore` still says not-ignored — so the setup this most needs to handle is the one it fails silently. (Submodules are fine either way.)
 
-**`printf '\n.code-winnow/\n'`, not `echo`.** If `info/exclude` does not end in a newline — common, since editors and tools append without one — `echo >>` concatenates onto the last line. A file ending `build/` becomes `build/.code-winnow/`, which **destroys the user's rule and excludes nothing.** The leading `\n` costs a blank line; git ignores blank lines in exclude files.
+**`printf '\n.code-winnow/\n'`, not `echo`.** If `info/exclude` does not end in a newline — common, since editors append without one — `echo >>` concatenates onto the last line: a file ending `build/` becomes `build/.code-winnow/`, which **destroys the user's rule and excludes nothing.** Git ignores blank lines in exclude files, so the leading `\n` is free.
 
-**`mkdir -p ... .code-winnow`.** Nothing else creates it. Step 0 makes the git `info/` directory, the scanner writes no files at all, and the first `> .code-winnow/...` redirect in Step 3 fails with *No such file or directory* — taking the review input, the report, the baseline JSON, the fix plan and the backup with it.
+**`mkdir -p ... .code-winnow`.** Nothing else creates it — the scanner writes no files at all — and the first `> .code-winnow/...` redirect in Step 3 fails with *No such file or directory*, taking the review input, the report, the baseline JSON, the fix plan and the backup with it.
 
-Use `.gitignore` only if the user wants the exclusion shared with their team, and only after telling them it will appear in the diff. That is the reason for the default: `.gitignore` is tracked, so editing it puts the file into `git diff` — the very scope this skill is about to review. A review tool whose first act is to dirty the diff it was invoked to clean has undermined itself. The local exclude file is never committed and never shows up in a diff.
+Use `.gitignore` only if the user wants the exclusion shared with their team, and only after telling them it will appear in the diff. That is the reason for the default: `.gitignore` is tracked, so editing it puts the file into the very diff this skill is about to review. The local exclude file is never committed and never shows up in a diff.
 
 The scanner also hard-skips its own workspace directory, so a run started before this step still will not review its own reports. That is a backstop, not a reason to skip Step 0.
 
@@ -383,11 +385,11 @@ Without that, `$STEM` and `$WINNOW` are empty three steps later and the run writ
 
 **`SNAPSHOT` is the staleness stamp.** It hashes `HEAD`, the tracked diff, and every untracked file's blob — so an edit to a file in scope changes it, and so does a commit, an amend or a rebase.
 
-All three ingredients earned their place by a failure:
+All three ingredients are load-bearing:
 
-- **Content, not `git status`.** Status reports which files changed, not what is in them, so appending a line to an already-untracked file left the stamp identical.
-- **`HEAD`.** Without it, a clean-tree branch review hashes two empty inputs and yields the empty-blob hash `e69de29b…` — literally the same constant in every repo on earth — so amends and rebases were invisible in exactly the scope where every line number moves.
-- **In `env.sh`, as a function.** It is compared in later blocks and by dispatched agents, and a shell function does not survive a tool call any more than a variable does. Defined only in this block, the check silently passed (both sides empty) or fired unconditionally (`snapshot: command not found`).
+- **Content, not `git status`.** Status reports which files changed, not what is in them, so appending a line to an already-untracked file leaves the stamp identical.
+- **`HEAD`.** Without it a clean-tree branch review hashes two empty inputs and yields the empty-blob hash `e69de29b…` — the same constant in every repo on earth — so amends and rebases go invisible in exactly the scope where every line number moves.
+- **In `env.sh`, as a function.** It is compared in later blocks and by dispatched agents, and a shell function no more survives a tool call than a variable does. Defined only here, the check silently passes (both sides empty) or fires unconditionally (`snapshot: command not found`).
 
 Recompute and compare it whenever the tree may have moved:
 
@@ -444,22 +446,15 @@ For `--paths`, the input is the named files' full contents instead.
 
 `git diff HEAD` — not `--cached` and plain `diff` separately. Those number the index blob and the worktree blob respectively, and the agents are reading the worktree.
 
-**Branch on what the scanner reports, not on the flag you passed.** This is the trap the earlier version fell into. `--scope auto` falls back to the branch diff on its own whenever the tree is clean — so a reviewer on a clean branch, one commit ahead, never passes `--scope branch` and still gets a branch review. The builder then ran `git diff HEAD`, which on a clean tree is empty, and produced a zero-byte input:
+**Branch on what the scanner reports, not on the flag you passed.** `--scope auto` falls back to the branch diff on its own whenever the tree is clean, so a reviewer one commit ahead never passes `--scope branch` and still gets a branch review. Build the input from `git diff HEAD` in that state and it is empty — three agents receive nothing, report nothing to review, and the run looks clean while the scanner holds a P1. The scanner's `scope` string is the one place the fallback decision is recorded.
 
-```
-scanner:  scope: branch vs main | files: 1 | findings: 2
-builder:  input.diff bytes: 0
-```
+Three further guards in that block, all against the same silent-empty failure:
 
-All three agents receive nothing, report nothing to review, and the run looks clean while the scanner is holding a P1. Asking the scanner for its `scope` string closes it, because that is the one place the fallback decision is actually recorded.
+**The `-s` check refuses to dispatch on an empty input.** Whatever new way this breaks, an empty review file must never reach three agents that will each confidently report nothing.
 
-**And refuse to dispatch on an empty input.** The `-s` check is the backstop: whatever new way this breaks, an empty review file must never reach three agents that will each confidently report nothing.
+**The `|| git diff --cached` fallback.** On a repo with staged files and no commit yet, `git diff HEAD` is fatal — there is no `HEAD` to diff against — but the `{ }` group still exits 0 and the redirect still creates an empty file. That state is a fresh repo mid-first-commit, and "clean this up before I commit" is this skill's headline trigger.
 
-Two further guards in that block, both for the same class of silent-empty failure:
-
-**The `|| git diff --cached` fallback.** On a repo with staged files and no commit yet, `git diff HEAD` is fatal — there is no `HEAD` to diff against. The `{ }` group still exits 0, the redirect still creates the file, and all three agents are handed zero bytes and report nothing to review while the scanner reports findings. That state is not exotic: it is a fresh repo mid-first-commit, and "clean this up before I commit" is this skill's headline trigger.
-
-**Skipping `.code-winnow/`.** The scanner hard-skips its own workspace, but this builder is a separate path, and it is the half that reaches an agent. If Step 0's exclusion ever fails — which before this revision it silently did in every linked worktree — `ls-files --others` sweeps in your own reports, and the pre-fix backups of the very source you just cleaned, and presents them to the judgment agents as new-file content. The `case` line makes that impossible rather than merely unlikely.
+**Skipping `.code-winnow/`.** The scanner hard-skips its own workspace, but this builder is a separate path and it is the half that reaches an agent. If Step 0's exclusion ever fails, `ls-files --others` sweeps in your own reports and the pre-fix backups of the source you just cleaned, and presents them to the judgment agents as new-file content.
 
 To cross-check which files are in scope, use `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`. **Not the scanner JSON** — it carries a `files` *count*, not a path list, and `findings[].path` only names files that produced a finding, so every clean file in scope silently vanishes from such a check.
 
@@ -497,10 +492,12 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 > ```
 > path:line — what → why it matters → proposed change      [P1|P2|P3]
 > anchor:     <the finding's source line, copied exactly as it appears>
-> occurrence: <N> of <M>   (M = how many times that exact line appears in the file, N = which one this is, counting top to bottom)
+> occurrence: <N>   (which matching line this is, counting top to bottom)
+> of:         <M>   (how many lines of the whole file match that anchor)
 > evidence:   <what you looked up and what you found — or the word `unverified`>
 > ```
-> For a scanner candidate, `anchor` and `occurrence` are already in the JSON; copy them. **For anything you found yourself, you must establish them** — open the file, copy the line, and count its occurrences. That count is not bookkeeping: at execution time it is the only thing standing between a fix and the wrong line, because the executor refuses any item whose occurrence count has changed. If you cannot establish it, say so and drop the item rather than guessing a number.
+> **`occurrence` and `of` count lines of the file, not findings.** For a scanner candidate they are in the JSON as **`anchor_index` and `anchor_total`** — copy those two. Do **not** copy the JSON's `occurrence` field into `occurrence:`; it is the index among findings sharing a rule and message, which is a different population. A diff-scoped scan flags only the instance the change touched, so its `occurrence` is 1 even when the anchor text is on three lines and the flagged one is the third — and an executor told "the first match" then edits an untouched line nobody reviewed.
+> **For anything you found yourself, establish both** — open the file, copy the line, normalise runs of whitespace, and count every line that matches. That count is not bookkeeping: at execution time it is the only thing standing between a fix and the wrong line, because the executor refuses any item whose total has changed. If you cannot establish it, say so and drop the item rather than guessing a number.
 > Also return the candidates you dismissed, and why.
 
 **Agent B — comment and docstring concision.** Comments and docstrings, and only those.
@@ -515,6 +512,7 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 > **Read the whole "Language traps that reverse the rule" section before touching any docstring**, and do not work from this summary — it is a summary, and summaries lose the exceptions that matter. In outline: Go doc comments are *supposed* to restate the identifier; Rust `///` fenced blocks compile and run as tests; C#, Java and Rust doc tags can be build inputs under warnings-as-errors; UE5 `/** */` above `UPROPERTY` is the designer-facing tooltip; **JSDoc `{type}` in a `checkJs` project is the only type information in the file**; and sometimes the docstring *is* the program — `argparse(description=__doc__)`, `click`, `docopt`.
 > **On a docstring, TIGHTEN is almost always the right verdict and DELETE almost always is not.** Many repos require a docstring on every public symbol and enforce it with `pydocstyle`, `ruff` D-rules, Doxygen or XML-doc warnings-as-errors, so deleting one breaks a build. Check whether anything else in this repo's public API goes undocumented before proposing a deletion.
 > **Report docstrings grouped per file** — a count, two exemplars, one rewrite pattern — not one finding per docstring. Forty P3 entries is how a report stops being read.
+> **Grouping is how you report; it is not how you hand over.** Every verdict you actually propose acting on — each DELETE, each TIGHTEN with its rewrite — carries the **same required `anchor:` / `occurrence:` / `of:` / `evidence:` fields Agent A uses**, on the same terms: `occurrence` and `of` count matching lines of the file, and `evidence:` is `rewrite, nothing removed` for a TIGHTEN. A KEEP needs none of them; it is not going anywhere. Group the *narrative* — one count and two exemplars per file — and attach the fields to the exemplars you are proposing. Without them the item reaches the executor with no line to match at, fails the first locating rule, and is reported stale — so the tightening the user approved silently does not happen.
 > You judge whether a comment earns its space, not whether it is true. If you suspect a comment or docstring is factually wrong about the code, say so in one line alongside your verdict and move on — another agent owns that question.
 
 **Agent C — documentation and header drift.** Dispatch **only** when the diff touches a documentation file (`*.md`, `docs/`, `README*`, `CHANGELOG*`), **adds a file**, **or** changes a public surface: CLI flags, exported or public names, config keys, install or run commands, public signatures, version or dependency requirements. Otherwise skip it and say so in one line in the report. There is no reason to pay for a third agent on a diff that renames a local.
@@ -528,13 +526,12 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 > *Is the header true?* A `@file` or `@brief` describing what the file used to do, or a header naming a filename that no longer matches after a rename. Same rule as any other doc: cite the header line and the thing that falsifies it.
 > **Authorship, copyright and date lines are not yours, even when they are stale.** `@author`, `@copyright`, `@date`, `@since`, `@license` — route every one of these to the header gate in Step 4, never to an ordinary truth finding with a proposed rewrite. Changing `@author Alice` to `@author Bob` because Bob edited the file is a stronger assertion about ownership than adding boilerplate is, and the gate exists precisely to keep this skill from making that assertion on the user's behalf. It is also frequently wrong: on most teams the header records who wrote the file, not who last touched it, and git already knows the difference.
 > *Does the header match the repo's convention?* Establish the convention first by reading the **top 15 lines of a sample of existing files of the same type**, on this branch and on the base. That sampling is a verification lookup, not a review — you are extracting a shape, not judging those files — so the three-file convention cap does not apply to it and nothing you see there becomes a finding. Then compare: do the diff's files carry that header, a different one, or none?
-> **Sample first-party files only.** Skip `ThirdParty/`, `Plugins/`, `vendor/`, `node_modules/`, and anything else the repo did not write. The scanner's vendor filter governs what it *scans* and does nothing about where you sample, so in any repo that vendors code the majority header can be **somebody else's copyright** — and the gate would then offer to stamp another company's notice onto the user's files. If the sample is not clearly uniform across first-party files, there is no convention to report; say that instead of picking the mode.
+> **Sample first-party files only.** Exclude `Plugins/`, `Packages/`, `Assets/Plugins/`, `Assets/ThirdParty/`, `Source/ThirdParty/`, `vendor/`, `third_party/`, `node_modules/`, and anything else the repo did not write. The scanner's vendor filter governs what it *scans* and does nothing about where you sample — and in a Unity or UE5 project those directories hold more `.cs`/`.h` files than the user's own code, so a naive sample concludes the convention is a **vendor's** copyright line and the gate offers to stamp someone else's ownership claim onto files the user wrote. The sample decides what the gate proposes, so a wrong sample makes the gate's approval meaningless. If the sample is not clearly uniform across first-party files, there is no convention to report; say that instead of picking the mode.
 > **Report whose notice it is and what year it carries**, not just that a header is missing. "The other files say `Copyright 2019 Acme Ltd`" is a fact the user needs before answering, because a header sampled from 2019 files asserts 2019 on files created this year, and neither the name nor the date is yours to choose.
-> **Sample first-party code only.** Exclude `Plugins/`, `Packages/`, `Assets/Plugins/`, `Assets/ThirdParty/`, `Source/ThirdParty/`, `vendor/`, `third_party/`, `node_modules/`, and anything else the repo vendors. In a Unity or UE5 project those directories hold more `.cs`/`.h` files than the user's own code, so a naive sample concludes the convention is a *vendor's* copyright line — and the gate then offers to stamp someone else's ownership claim onto files the user wrote. The sample decides what the gate proposes, so a wrong sample makes the gate's approval meaningless.
 > **Report the conflict. Never propose unifying headers on your own** — see the gate in Step 4. And never propose touching a header on a file the diff did not add or modify: fixing the repo's header consistency is not this review's job, and a diff that rewrites 200 file headers is the most reviewer-hostile output this skill could produce.
 > Severity: **P2** for a stale doc line, and for a header that states something *wrong* — the wrong license, another party's copyright. **P3** for a *missing* header, license ones included, and for a divergent style or doc header. **P1** when a stale line is an install command, a run command, or a security claim — someone will follow it, it will fail, and they will not know why. **P1 also when the repo enforces headers in CI** — Apache RAT, `addlicense -check`, checkstyle `Header`, a `license-eye` action: then a missing header is a red build, which is a fact about this repo rather than a judgment call, and one look for that config settles it.
 > **Missing is not the same as wrong, and only one of them is P2.** Copyright subsists without notice under Berne, so a new internal file carrying no boilerplate has close to no legal consequence — calling that a compliance gap overstates it, and P2 is inside "fix all", which is exactly where a header edit must never be. A header asserting the wrong licensor is a misstatement of fact and stays P2.
-> Return findings as `docpath:line — the claim → the diff line that falsifies it (path:line) → proposed rewrite`, with the same required `anchor:` / `occurrence:` / `evidence:` fields Agent A uses — a doc line is located at execution time by exactly the same machinery, and doc files are the ones most likely to have shifted since you read them. Report header-convention conflicts separately, as a count and a sample, not as one finding per file.
+> Return findings as `docpath:line — the claim → the diff line that falsifies it (path:line) → proposed rewrite`, with the same required `anchor:` / `occurrence:` / `of:` / `evidence:` fields Agent A uses, on the same terms — a doc line is located at execution time by exactly the same machinery, and doc files are the ones most likely to have shifted since you read them. **Establish `occurrence` and `of` by counting matching lines yourself**: a doc the diff never touched was never scanned, so there is no JSON row to copy them from, and a repeated line like `Call \`Dash.Charge()\` before the cooldown elapses.` is exactly the shape that repeats in a document. Report header-convention conflicts separately, as a count and a sample, not as one finding per file.
 
 **Two searches, two different rules.** Reading a neighbouring file to learn the repo's conventions is capped at three files, is read-only, and produces no findings — it is the only reason to *review* a file the diff did not touch. Grepping the repo to check whether a helper already exists, whether a caller relies on a guard, whether a scene references a field, or which doc describes a changed function is verification, is uncapped, and produces no findings of its own. Everything else in the scope rules stands.
 
@@ -583,7 +580,7 @@ The rule is in `$WINNOW/references/core-patterns.md` under "Comments as evidence
 - **No evidence either way** — the grep returned nothing. **This is not disproof, and must never be filed as Disproved.** Keep the finding at its original severity, mark it `unverified`, propose nothing.
 - **Unperformable** — no network for the ticket, no tooling to read the asset. Same handling as no-evidence.
 
-**The middle two are where this goes wrong, which is why there are four and not three.** An earlier version listed Confirmed / Contradicted / Impossible, and an agent whose grep came back empty had no bucket for its actual situation — the nearest label was "Contradicted", which upgrades severity and writes "the comment is false" into the report. **Absence of evidence is the normal result for truthful comments**, because the consumers worth commenting about are the ones grep cannot see: Blueprints and scenes in binary assets, reflection, dependency injection, serializers, SQL views, wire protocols. Only positive disproof earns the upgrade.
+**The middle two are where this goes wrong, which is why there are four buckets and not three.** With only Confirmed / Contradicted / Impossible, an agent whose grep came back empty has no bucket for its actual situation, and the nearest label is "Contradicted" — which upgrades severity and writes "the comment is false" into the report. **Absence of evidence is the normal result for truthful comments**, because the consumers worth commenting about are the ones grep cannot see: Blueprints and scenes in binary assets, reflection, dependency injection, serializers, SQL views, wire protocols. Only positive disproof earns the upgrade.
 
 An unverified claim is **not** silently preserved either: it becomes a question for the user, reported in its own "Author claims — confirm" section **at the severity A gave it**. It never enters the fix plan and it is never proposed for deletion.
 
@@ -776,7 +773,7 @@ Severities for header findings are in Agent C's brief above: missing is P3, wron
 
 One section, one meaning: **problems in the files this change touches, on lines this change did not touch.** Not the rest of the repo. This is a byproduct of reading around the diff, never a reason to go looking — and nothing seen during a Step 3 verification lookup belongs here either.
 
-**"Touched" includes lines the change took away, and that is not a technicality.** A finding about a *block* — a test function, not the `def` naming it — belongs to this change when anything inside that block was added **or deleted**. Judging by the anchor line alone made the skill blind in the one direction it exists to look: delete a generated test's only assertion and every surviving line is untouched, so the now-assertionless test filed as pre-existing and dropped out of the default run. The change created a P1 and the scan reported nothing. A change that *only* deletes used to resolve to "no diff found" outright, and under `--scope auto` that empty result fell through to the branch diff and reviewed a different set of files under the working tree's name.
+**"Touched" includes lines the change took away, and that is not a technicality.** A finding about a *block* — a test function, not the `def` naming it — belongs to this change when anything inside that block was added **or deleted**. Judging by the anchor line alone is blind in the one direction this skill exists to look: delete a generated test's only assertion and every surviving line is untouched, so the now-assertionless test files as pre-existing and drops out of the default run. The change created a P1 and the scan reports nothing.
 
 Two sources feed it, and both are optional:
 
@@ -820,7 +817,8 @@ Tests-before: (filled in by Step 5a, before the first edit)
 - [ ] P1 bare catch swallows the cooldown reset
       file:     src/Dash.cs
       line:     88
-      occurrence: 1 of 1
+      occurrence: 1
+      of:         1
       anchor:   catch (Exception) { }
       fix:      narrow to InvalidOperationException, or let it propagate
       evidence: rewrite, nothing removed
@@ -829,7 +827,8 @@ Tests-before: (filled in by Step 5a, before the first edit)
       reserved but names no ticket — merged finding, both lines go
       file:     src/Dash.cs
       line:     41
-      occurrence: 1 of 1
+      occurrence: 1
+      of:         1
       anchor:   private Rig cachedRig;
       fix:      delete the field and the comment above it
       evidence: git grep -c cachedRig -- '*.cs'          -> 3 (all in src/Dash.cs)
@@ -841,7 +840,8 @@ Tests-before: (filled in by Step 5a, before the first edit)
 - [ ] P2 the tuning guide still documents `Dash.Charge()`, renamed this change
       file:     docs/tuning.md
       line:     37
-      occurrence: 1 of 2
+      occurrence: 1
+      of:         2
       anchor:   Call `Dash.Charge()` before the cooldown elapses.
       fix:      rename to `Dash.BeginCharge()`
       evidence: rewrite, nothing removed
@@ -852,7 +852,8 @@ Tests-before: (filled in by Step 5a, before the first edit)
 - [ ] P2 no file header; repo convention is the Epic copyright line
       file:     src/DashConfig.cs
       line:     1
-      occurrence: 1 of 1
+      occurrence: 1
+      of:         1
       anchor:   using UnityEngine;
       fix:      insert the repo header above line 1
       evidence: sampled 40 first-party .cs files (Plugins/ and ThirdParty/
@@ -864,11 +865,13 @@ Tests-before: (filled in by Step 5a, before the first edit)
 - Any file not named by a `file:` line above
 ````
 
-**`file:` is authoritative, not the prose.** Every item carries at least one `file:` line, and `line:` / `occurrence:` / `anchor:` are the fields it pairs with; a merged X6 finding lists each group in order. The headline is for the reader.
+**`file:` is authoritative, not the prose.** Every item carries at least one `file:` line, and `line:` / `occurrence:` / `of:` / `anchor:` are the fields it pairs with; a merged X6 finding lists each group in order. The headline is for the reader.
 
-**`line:` is what the locating rule below actually uses**, so an item without it cannot be applied. The earlier format dropped the line number when `file:` became authoritative, which left the rule "anchor matches at the recorded location" pointing at a location nothing recorded — every item then failed rule 1, fell to rule 2, and reported stale. Copy `line` and `occurrence` straight out of the scanner JSON; `occurrence` distinguishes the third `catch (Exception) { }` in a file from the first, which no other field can.
+**`line:` is what the locating rule below actually uses**, so an item without it cannot be applied — "anchor matches at the recorded location" needs a recorded location, and without one every item fails rule 1, falls to rule 2, and reports stale.
 
-That is not decoration. The earlier format put the path inside the summary sentence and had the backup parse it back out, which lost paths containing spaces, lost items with no `:LINE`, lost the second file of every merged finding, and lost anything indented under a sub-heading — while printing a success count derived from the same regex that had just missed them. Prose is not a data format, and a backup that under-collects silently is worse than no backup at all.
+**`occurrence:` and `of:` count matching lines of the file, and both come from the scanner as `anchor_index` and `anchor_total`.** Copy `line` and those two straight out of the JSON. Together they distinguish the third `catch (Exception) { }` in a file from the first, which no other field can. **The JSON's `occurrence` field is not one of them** — it indexes findings that share a rule and message, so a diff-scoped run stamps 1 on the only instance the change touched even when the anchor is on three lines and the flagged one is the third. Copying it into `occurrence:` hands the executor an ordinal measured on a different population, and rule 2 below then edits the first matching line: untouched, unreviewed, unapproved code.
+
+That is not decoration. Put the path inside the summary sentence and have the backup parse it back out, and you lose paths containing spaces, items with no `:LINE`, the second file of every merged finding, and anything indented under a sub-heading — while printing a success count derived from the same regex that just missed them. Prose is not a data format, and a backup that under-collects silently is worse than no backup at all.
 
 Anchors are written **unquoted and unfenced**. Backticks inside a value break the moment an anchor contains a backtick, which doc fixes routinely do.
 
@@ -890,7 +893,8 @@ This skill removes tests on purpose: merging structural duplicates, dropping a f
 - [ ] P2 three tests differ only in the timeout literal — parametrize them
       file:        tests/test_retry.py
       line:        12
-      occurrence:  1 of 1
+      occurrence:  1
+      of:          1
       anchor:      def test_retry_at_one_second():
       fix:         merge into @pytest.mark.parametrize with the three values
       evidence:    rewrite, coverage preserved — same three cases, one body
@@ -913,7 +917,7 @@ This is the whole correctness gate, and it is deliberately not a fourth reviewin
 
 Files change between approval and execution, so the executor locates by **anchor text, not line number**. Two things the naive comparison gets wrong:
 
-**Normalise before comparing.** The anchor came from the scanner's `anchor_of`, which collapses every run of whitespace to one space, strips the ends, and truncates to 120 characters. So the plan's `private Rig cachedRig;` never equals the file's `        private Rig cachedRig;`. Apply the same normalisation to each candidate line before comparing, and treat a 120-character anchor as a prefix match.
+**Normalise before comparing.** The anchor came from the scanner's `normalise_anchor`, which collapses every run of whitespace to one space, strips the ends, and truncates to 120 characters. So the plan's `private Rig cachedRig;` never equals the file's `        private Rig cachedRig;`. Apply the same normalisation to each candidate line before comparing, and treat a 120-character anchor as a prefix match. **`of:` was counted under that same normalisation**, so comparing raw lines reaches a different total and every moved item reports stale.
 
 **Never search for a moved anchor.** Match only where the plan says, normalised:
 
@@ -921,11 +925,9 @@ Files change between approval and execution, so the executor locates by **anchor
 2. It does not, but the file still contains **exactly `of:` matches** for the anchor → edit the `occurrence:`-th of them, counting **top to bottom**, and say the line moved.
 3. Anything else — including a match count that is not `of:` — → **report the item stale and skip it.** Never search for "the one remaining match".
 
-**`of:` is the denominator, and without it rule 2 is the bug it was written to fix.** An earlier version said "search the file; exactly one match, edit there", which edits declined code: `catch (Exception) { }` at line 88 is approved, the same anchor at line 210 was struck from the plan, the first run applies line 88, and on any re-run the lone-match search finds only line 210 and edits **the one line the user refused**. Replacing that with a bare ordinal did not help — "the anchor appears `occurrence:` times **or more**" is satisfied by 1 ≥ 1, so the same re-run picks line 210 again, and a *newly written* `catch` above the target shifts every ordinal down by one.
+**`of:` is the denominator, and the ordinal is unsafe without it.** An ordinal alone is satisfied by any file with at least that many matches, so a re-run finds the *declined* twin of an already-applied fix and edits the one line the user refused — and a newly written `catch` above the target shifts every ordinal down by one. Recording the total closes both: two matches at plan time and one now means something was deleted, three means something was added, and either way the ordinal no longer identifies what it identified. Report stale — that costs a re-run, against a wrong-line edit that costs a deletion nobody approved.
 
-Recording the total closes it. Two matches at plan time and one now means something was deleted; three means something was added. Either way the ordinal no longer identifies what it identified, and the item is stale — which costs a re-run, against a wrong-line edit that costs a deletion nobody approved.
-
-**Counting is top to bottom, and the scanner agrees.** `occurrence` used to be numbered in `ast.walk` order, which is breadth-first — a nested handler was numbered before a shallower one written below it, so the plan's ordinal and the executor's count referred to different things. The scanner now sorts by line, which is also the only ordering a human reading the file can reproduce.
+**Counting is top to bottom, over matching lines, and the scanner agrees.** `anchor_index` and `anchor_total` are computed by walking the file in order under the same normalisation, which is also the only ordering a human reading the file can reproduce. Do not count findings, do not count occurrences of a *symbol* — count lines whose normalised text matches the anchor.
 
 A fix applied to the wrong line is the worst outcome available in this whole skill, and it is silent. Skipping a genuinely-moved fix costs the user one re-run; the alternative costs them a deletion they declined.
 
@@ -952,7 +954,7 @@ Say plainly what it buys, and do not oversell it: a long edit-and-test loop then
 **Its prompt must carry four things, because it has never read this file** and every rule below lives only here:
 
 1. The fix plan, and `andrej-karpathy-skills:karpathy-guidelines`.
-2. **The anchor-location rules** from Step 4b — match at `line:`, else the `occurrence:`-th match, else report stale. Never "the one remaining match". Without this the agent locates by line number or searches, and the search is what edits code the user struck from the plan.
+2. **The anchor-location rules** from Step 4b, in full — normalise, match at `line:`, else *only if the file holds exactly `of:` matches* take the `occurrence:`-th counting top to bottom, else report stale. Never "the one remaining match", and never the ordinal without the total check. Without this the agent locates by line number or searches, and the search is what edits code the user struck from the plan.
 3. **The `evidence: unverified` rule** — skip those items, report them, do not perform the missing lookup and proceed.
 4. **"Step 5a is already done; do not run it."** Otherwise it re-runs the backup and copies half-edited files over the restore point.
 
@@ -1044,13 +1046,13 @@ PY
 
 **Any `REFUSING:` line means stop and tell the user.** Do not edit, and do not "fix" the plan by dropping the item that would not parse.
 
-Five failure modes are designed out; the last four had each already happened once:
+Five failure modes are designed out:
 
-- **It fails closed on `Status:`.** The approval gate was enforced only by a sentence asking the executor to read the line and stop on `UNAPPROVED` — so a plan with **no** `Status:` line passed, and that is what a truncated write, a hand-assembled plan, or a plan reconstructed from a report all produce. The marked case was refused and the unmarked case was not, which is backwards: an unattended run at least labels itself. This is the right place for the check because Step 5a is the one step every rung runs, cold entry included, and it runs before the first edit.
-- **It counts plan items independently of the paths it captured.** A count derived from the capturing regex can never report its own miss — the old one printed `backed up 1 of 1` while two files went unprotected.
-- **It refuses a non-empty backup directory.** `$STEM` is pinned for the whole session, so a second Step 5a — a follow-up "also fix 7 and 8", or a re-run — copied *post-fix* files over the originals and printed the same success line as a healthy first run. The restore point was gone and nothing said so.
+- **It fails closed on `Status:`.** A plan with **no** `Status:` line is what a truncated write, a hand-assembled plan, or one reconstructed from a report all produce — so absence has to refuse too. Only the unattended path marks itself; nothing marks the unmarked case. Step 5a is the right place because it is the one step every rung runs, cold entry included, before the first edit.
+- **It counts plan items independently of the paths it captured.** A count derived from the capturing regex can never report its own miss.
+- **It refuses a non-empty backup directory.** `$STEM` is pinned for the session, so a second Step 5a — a follow-up "also fix 7 and 8", or a re-run — would copy *post-fix* files over the originals and print the same success line as a healthy first run.
 - **It refuses on any missing file** instead of printing a note and continuing.
-- **It resolves against the git toplevel.** With `os.getcwd()`, running from a subdirectory backed up nothing, printed `backed up 0 of 1`, and exited 0.
+- **It resolves against the git toplevel.** With `os.getcwd()`, running from a subdirectory backs up nothing and exits 0.
 
 **Do not go back to `{f['path'] for f in data['findings']}`.** Agent C's entire purpose is producing findings on files the diff never touched, so an untouched doc has no entry in the scanner JSON at all — and it would be edited with no copy made.
 
@@ -1179,7 +1181,7 @@ Once verification passes, the backup from Step 5a has done its job. Say where it
 
 **Run this on every run, before the test comparison above.** It was once written as a fallback for runtimes lacking `superpowers:requesting-code-review`, which had it exactly backwards: installing the recommended reviewer bought you *less* safety, silently. A cold reviewer reads the diff as it now stands and does not know which lines you removed — this pass is the only thing in the run that checks the removals themselves, and it is five questions.
 
-**Re-run every `evidence:` command behind an applied deletion and read the delta. Equality is the wrong test here, and requiring it was a bug.** These commands are *pre*-conditions: `git grep -c cachedRig -- '*.cs'` returned 3 at plan time **because the field was still there**. After the approved deletion it returns nothing. An earlier version of this step required the output to "still match", which failed every correct deletion in this document's own worked example — it cried wolf on 100% of good outcomes, and the only evidence that survived unchanged was evidence that proved nothing.
+**Re-run every `evidence:` command behind an applied deletion and read the delta. Equality is the wrong test here.** These commands are *pre*-conditions: `git grep -c cachedRig -- '*.cs'` returned 3 at plan time **because the field was still there**, and after the approved deletion it returns nothing. Requiring the output to "still match" fails every correct deletion — the only evidence that survives a deletion unchanged is evidence that proved nothing.
 
 Three readings, per item:
 
@@ -1215,7 +1217,7 @@ You were invoked with a fix plan rather than a review request — `code-winnow: 
 
 **First, check the `Status:` line — it must be present and must read `APPROVED`.** Anything else, including *no `Status:` line at all*, means stop: report that nobody has reviewed these findings and ask for approval before anything else. Absence is not permission. Step 5a enforces this with a `REFUSING:` line so the gate does not depend on you remembering to read it here, but knowing why it refused saves a confused retry.
 
-1. Read the fix plan. It is self-contained: `Status`, `Skill` (your `$WINNOW`), `Scope`, `Feature`, `Baseline` (the pre-fix JSON for Step 6), `Backup`, `Undo`, `Verify`, then the fixes as `file:` / `anchor:` pairs and the never-touch list. **`$STEM` is the plan's filename minus `.fixplan.md`.**
+1. Read the fix plan. It is self-contained: `Status`, `Skill` (your `$WINNOW`), `Scope`, `Feature`, `Baseline` (the pre-fix JSON for Step 6), `Backup`, `Undo`, `Verify`, then the fixes and the never-touch list. Each fix carries `file:`, `line:`, `occurrence:`, `of:`, `anchor:`, `fix:` and `evidence:` — **all five of the first are what locate the edit**, and the rules for using them are in Step 4b under "Locating a fix at execution time". Read that section; it is the one part of the review you do inherit. **`$STEM` is the plan's filename minus `.fixplan.md`.**
 2. Re-run the Step 0 block. It is idempotent and it verifies with `git check-ignore` — cheap insurance against a repo where the exclusion was lost or was never valid, which in a linked worktree it silently was not. This is the one part of Steps 0–4b you *do* run.
 
    Then look at `.code-winnow/env.sh` before running anything that sources it. **It is from the session that wrote the plan, and it may name a different `$STEM`** — a later review in the same repo overwrites it, and a plan copied to another machine has none at all. Every block below opens with `. .code-winnow/env.sh`, so a stale file silently redirects the backup and the reconciliation to another run's filenames. If its `STEM` does not match the plan's own name, or the file is missing, set `WINNOW`, `PY`, `STEM` and `BACKUP` yourself at the top of each call: the plan's header carries `Skill:` and `Backup:`, and `STEM` is its filename minus `.fixplan.md`.

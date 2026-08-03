@@ -79,6 +79,10 @@ READ_ERRORS = []
 # return points. Safe because each scan is its own process.
 REMOVED_AT = defaultdict(set)
 
+# {path: [line]} for every file actually read this run, so anchor totals are
+# counted against the same bytes the rules fired on.
+FILE_LINES = {}
+
 
 def warn(msg):
     if msg not in WARNINGS:
@@ -487,6 +491,20 @@ def touches_change(f, added, removed_at):
     return any(n in added or n in removed_at for n in range(lo, hi + 1))
 
 
+ANCHOR_MAX = 120
+
+
+def normalise_anchor(text):
+    """Collapse runs of whitespace, strip the ends, truncate.
+
+    SKILL.md tells the executor to apply exactly this before comparing a plan
+    anchor against a candidate line. It is one function here so the two
+    definitions cannot drift: if they disagree, every moved fix reports stale
+    and rule 2 of the locating ladder never runs.
+    """
+    return re.sub(r"\s+", " ", text).strip()[:ANCHOR_MAX]
+
+
 def anchor_of(lines, idx):
     """Whitespace-normalised source of the finding's line.
 
@@ -495,7 +513,7 @@ def anchor_of(lines, idx):
     line shifts that deleting other findings causes.
     """
     if 1 <= idx <= len(lines):
-        return re.sub(r"\s+", " ", lines[idx - 1]).strip()[:120]
+        return normalise_anchor(lines[idx - 1])
     return ""
 
 
@@ -671,11 +689,28 @@ def check_universal(path, lines, findings):
                 # A non-breaking space or soft hyphen in a Markdown file is
                 # routine - pasted text, an option-space, a table alignment -
                 # and it sorted to the top of "P1 - Risk (behavior, security,
-                # test integrity)". The bidi and invisible-identifier
-                # characters are a real attack in prose too, since a reader
-                # reviews the rendered form: those stay P1 everywhere.
+                # test integrity)".
+                #
+                # A test file is the same case, and the demotion was wired to
+                # `local-path` and not to this rule: a suite that tests
+                # invisible-character handling reported a P1 for every fixture
+                # it needed to do so, including this skill's own. An i18n,
+                # encoding or security corpus does the same. So a test file
+                # demotes exactly as prose does.
+                #
+                # Bidi and invisible-identifier characters stay P1 in real
+                # source and in prose - a reader reviews the rendered form, so
+                # those are an attack there too - but drop one step, not two,
+                # inside a test, where the overwhelmingly likely reading is a
+                # fixture and the judgment pass still sees it.
                 soft = name in ("non-breaking space", "soft hyphen")
-                sev = "P3" if (is_prose and soft) else "P1"
+                illustrative = is_prose or is_test
+                if soft and illustrative:
+                    sev = "P3"
+                elif is_test:
+                    sev = "P2"
+                else:
+                    sev = "P1"
                 add(findings, path, idx, sev, "unicode-invisible",
                     f"{name} in source - invisible in review, breaks grep",
                     anchor)
@@ -1909,6 +1944,45 @@ def number_occurrences(findings):
             f["occurrence"] = n
 
 
+def number_anchor_matches(findings):
+    """Stamp `anchor_index` / `anchor_total`: where this finding's line sits
+    among the lines of its file that match the anchor, and how many there are.
+
+    **This is a different population from `occurrence` and conflating them
+    edits the wrong line.** `occurrence` counts findings that share a key, so
+    a diff-scoped run numbering the single instance the change touched stamps
+    1 - even when the anchor text is on three lines and the flagged one is the
+    third. The Step 4b executor locates a moved fix by counting matching
+    *lines*, top to bottom, so it needs the textual ordinal and the textual
+    total. Given the flagged index instead, it edits the first match: code the
+    diff never touched, no agent reviewed, and the user never approved.
+
+    The total is the half that makes the ordinal safe. Two matches at plan
+    time and one now means something was deleted; three means something was
+    added. Either way the ordinal no longer identifies what it identified,
+    and the item is stale - which costs a re-run, against a wrong-line edit
+    that costs a deletion nobody approved.
+    """
+    for f in findings:
+        anchor = f.get("anchor") or ""
+        lines = FILE_LINES.get(f["path"])
+        if not anchor or lines is None:
+            continue
+        # A truncated anchor is a prefix, and the executor is told to treat it
+        # as one. Matching on equality here would count fewer lines than it
+        # does, and every long anchor would come back stale.
+        truncated = len(anchor) == ANCHOR_MAX
+        matches = [n for n, text in enumerate(lines, 1)
+                   if (normalise_anchor(text).startswith(anchor) if truncated
+                       else normalise_anchor(text) == anchor)]
+        if not matches:
+            continue
+        f["anchor_total"] = len(matches)
+        f["anchor_index"] = (matches.index(f["line"]) + 1
+                             if f["line"] in matches
+                             else sum(1 for n in matches if n <= f["line"]) or 1)
+
+
 def split_declined(findings, declined_path):
     """Move findings the user already rejected out of the live list.
 
@@ -2025,6 +2099,10 @@ def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
     lines = read_lines(path)
     if lines is None:
         return None
+    # Kept for number_anchor_matches, which counts how many lines of the file
+    # match each anchor. Re-reading the file there would let the two counts be
+    # taken against different bytes if the tree moved mid-scan.
+    FILE_LINES[path] = lines
     ext = os.path.splitext(path)[1].lower()
     check_universal(path, lines, findings)
     if ext not in PY_EXT:
@@ -2181,6 +2259,7 @@ def main():
     generated = datetime.datetime.now()
     stem = args.stem or report_stem(target, generated)
     number_occurrences(findings)
+    number_anchor_matches(findings)
     declined = []
     if args.declined:
         findings, declined = split_declined(findings, args.declined)
