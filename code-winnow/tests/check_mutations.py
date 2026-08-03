@@ -103,6 +103,76 @@ if not m.group(1).upper().startswith("APPROVED"):
      r'''if "UNAPPROVED" in header:
     sys.exit("REFUSING: UNAPPROVED")''',
      "step5a"),
+
+    # Agent D's notes are never applied, and nothing mechanical enforces that
+    # except the notes document failing to parse as a fix plan. Three ways it
+    # could start parsing, one row each - the tokens Step 5a finds items and
+    # paths by, and the Status line that gates the whole script.
+    ("notes-doc-no-file-line", SKILL,
+     "  frequency:  once per FixedUpdate",
+     "  file:       src/Grid.cs\n  frequency:  once per FixedUpdate",
+     "notes"),
+
+    ("notes-doc-no-item-marker", SKILL,
+     "- src/Grid.cs:22",
+     "- [ ] src/Grid.cs:22",
+     "notes"),
+
+    ("notes-doc-status-not-approved", SKILL,
+     "Status:   NOT APPLIED",
+     "Status:   APPROVED",
+     "notes"),
+
+    # A secrets rule earns its place only if it stays quiet. Break the
+    # placeholder guard and every redacted config line becomes a P1 - which is
+    # how a reader learns to skim the severity that must never be skimmed.
+    ("secret-placeholder-guard", SCAN,
+     "    if len(set(val)) <= 2:\n        return True\n",
+     "    if False:\n        return True\n",
+     "placeholder"),
+
+    ("secret-placeholder-words", SCAN,
+     "    return any(w in low for w in PLACEHOLDER_WORDS)",
+     "    return False",
+     "placeholder"),
+
+    # The inverse failure: a live vendor token demoted in a test file, where
+    # keys most often leak. Every other universal rule demotes there, so this
+    # exemption is one edit away from being "tidied up" into consistency.
+    ("secret-no-test-demotion", SCAN,
+     '            add(findings, path, idx, "P1", "committed-secret",\n'
+     '                "credential in a recognised vendor format - rotate it; "',
+     '            add(findings, path, idx, "P2" if illustrative else "P1",\n'
+     '                "committed-secret",\n'
+     '                "credential in a recognised vendor format - rotate it; "',
+     "vendor_token"),
+
+    # The exemption for tokens must stay narrower than the one for assigned
+    # literals. Widening it to the filler-word list looks like consistency and
+    # silently drops any real token that happens to contain `nil` or `test` -
+    # a false negative, on the rule where that is the worst outcome available.
+    ("secret-token-exemption-width", SCAN,
+     "elif m_token and not looks_like_documented_example(m_token.group(0)):",
+     "elif m_token and not looks_like_placeholder(m_token.group(0)):",
+     "filler_word"),
+
+    # Pinning the UNC separators to exactly two-then-one matches a config file
+    # and misses every escaped source literal, which is the commoner form.
+    ("unc-escaped-separators", SCAN,
+     r'r"(?<![A-Za-z0-9:_])\\{2,4}[A-Za-z][A-Za-z0-9._-]{2,}\\{1,2}'
+     r'[A-Za-z0-9._$-]+")',
+     r'r"(?<![A-Za-z0-9:_])\\\\[A-Za-z][A-Za-z0-9._-]{2,}\\'
+     r'[A-Za-z0-9._$-]+")',
+     "escaped_source_literal"),
+
+    # The other half of the same trade. Widening the separators without the
+    # lookbehind makes `C:\\Users\\me` a "host reference" - a false positive
+    # in every Windows codebase, and a strictly worse outcome than the miss
+    # the widening was there to fix.
+    ("unc-drive-path-lookbehind", SCAN,
+     r'r"(?<![A-Za-z0-9:_])\\{2,4}',
+     r'r"\\{2,4}',
+     "drive_path"),
 ]
 
 

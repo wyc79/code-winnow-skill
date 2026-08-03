@@ -1,6 +1,6 @@
 ---
 name: code-winnow
-description: Use when the user wants generated-code chaff removed from an uncommitted change or a branch — "winnow", "de-slop", "deslop", "clean this up before I commit", "does this look AI-written", "make this idiomatic", "cut the slop" — or is about to open a PR on agent-written code, or a large generated change just landed. Also use when asked to apply or resume an approved cleanup: "apply the fix plan", "code-winnow: apply <path>.fixplan.md". Covers code, comments, docstrings, generated tests, file headers, and docs the change made false. Not for general code review, bug hunts, or security audits — it removes chaff, not defects.
+description: Use when the user wants generated-code chaff removed from an uncommitted change or a branch — "winnow", "de-slop", "deslop", "clean this up before I commit", "does this look AI-written", "make this idiomatic", "cut the slop" — or is about to open a PR on agent-written code, or a large generated change just landed. Also use when asked to apply or resume an approved cleanup: "apply the fix plan", "code-winnow: apply <path>.fixplan.md". Covers code, comments, docstrings, generated tests, file headers, and docs the change made false. Also flags changes that will break silently — where no test can catch it — and writes separate, never-applied performance notes. Not for general code review, bug hunts, or security audits.
 ---
 
 # Code-winnow
@@ -16,6 +16,8 @@ Generated code fails review in predictable ways. It is rarely wrong; it is bloat
 **If the user names one feature, that is the scope** — not the whole diff, even when the diff is a branch against a base. "Winnow the dash cooldown work" means the hunks that feature touched and nothing else, however much chaff is sitting three files away. Touching unrelated code inside an approved diff is the same failure as wandering outside it: the user gets back a change they did not ask for, mixed into one they cannot separate it from. Step 1 resolves the feature set and states it back before anything is reviewed.
 
 **This is a diff review, not a repository audit.** Unless the user asks in so many words for a whole-repo pass, the job is the current change and nothing else. Pre-existing problems reach the report only as byproducts — you had the file open to review the diff, you noticed something, you mention it. Do not go looking, do not sweep for vulnerabilities, and do not let incidental findings grow past a short aside. Someone who asked you to winnow a branch and got a repo-wide defect list back did not get what they asked for, and the thing they did ask for is now buried.
+
+**Two passes look like exceptions to that and are not.** Agent E asks how the change breaks silently, and Agent D asks what it made slow. Both are bounded by gates as hard as the scope rule itself — E reports only what the diff did and only when no test could catch it, D reports only what it can attach a frequency to — and both work on diff lines like everyone else. E is not a security review and does not go looking for vulnerabilities; it asks whether *this change* removed a protection or introduced a failure with no signal. `$WINNOW/references/fragility.md` and `$WINNOW/references/performance.md` hold the gates, and an agent that cannot open them will produce exactly the unbounded critique this paragraph refuses.
 
 **The rule is about what becomes a finding, not about what you may read.** Only lines the diff touched can produce one. Reading elsewhere is permitted for exactly three purposes, all defined in Step 3, and none produces a finding however bad the code you pass through looks:
 
@@ -40,7 +42,7 @@ Both are courtesies with hard limits, not licence to widen. Everything else outs
 
 **Resolve `$WINNOW` before anything else.** It is the absolute path of this skill's directory — the one containing this file, `scripts/` and `references/`. Every scanner call and every reference path below is written against it, because a bare `references/…` or `scripts/scan.py` only resolves when the cwd is the skill folder, which is never where the repo is.
 
-**Then read `$WINNOW/references/core-patterns.md` yourself, before Step 3.** Not only the agents — *you*. Two steps are yours alone and neither can be executed from a pointer: Step 3.5 arbitrates comment evidence against the grading rule in that file, and Step 6's deletion-safety pass checks removals against its directive-comment table. On a parallel run you dispatch three agents and would otherwise never open it, then make both judgments against a filename.
+**Then read `$WINNOW/references/core-patterns.md` yourself, before Step 3.** Not only the agents — *you*. Two steps are yours alone and neither can be executed from a pointer: Step 3.5 arbitrates comment evidence against the grading rule in that file, and Step 6's deletion-safety pass checks removals against its directive-comment table. On a parallel run you dispatch the judgment agents and would otherwise never open it, then make both judgments against a filename.
 
 **Run Step 0 next, before anything else that writes** — including the capability check below, which writes `.code-winnow/substitutions.md`. Writing that file before the exclusion lands is the exact self-dirtying Step 0 exists to prevent.
 
@@ -171,7 +173,7 @@ Confirm or correct before I start.
 
 **Do not produce that reading yourself. Dispatch Agent S first.**
 
-**Agent S — scope.** Dispatched only when a feature was named, and **before** A, B and C. It gets the input diff and the user's phrase verbatim. Nothing else: no scanner JSON, no conversation history, no design rationale.
+**Agent S — scope.** Dispatched only when a feature was named, and **before** A, B, C, D and E. It gets the input diff and the user's phrase verbatim. Nothing else: no scanner JSON, no conversation history, no design rationale.
 
 > The user asked for a review of one thing only, in their words: *"winnow the dash cooldown work"*.
 > Here is the full diff. Decide, for each file and for any region within a file that plainly differs from the rest of it, whether it is part of what they asked for.
@@ -195,12 +197,12 @@ Confirm or correct before I start.
 
 Every `unsure` is a question, asked now. `unsure` must never be silently resolved into either pile — that bucket is precisely where a guess would have been wrong without anyone finding out, and asking costs one line.
 
-**A, B and C then receive the confirmed scope as a rule, not a hint** — the file and region list, plus the user's phrase for context. They do not re-derive it. One thing they may do:
+**A, B, C, D and E then receive the confirmed scope as a rule, not a hint** — the file and region list, plus the user's phrase for context. They do not re-derive it. One thing they may do:
 
 > Scope was settled before you started and the user confirmed it. Work only inside it.
 > If you find something that plainly belongs to this feature and is outside the list, or plainly does not belong and is inside it, **say so as an appeal** — name the location and the reason, and keep reviewing under the list as given. Do not act on your own scope opinion; a boundary that moves per agent stops being a boundary.
 
-Appeals go to the user with the report, never applied silently. That keeps the one thing a reviewing agent genuinely knows better — it has read the code — without letting three agents each redraw the line.
+Appeals go to the user with the report, never applied silently. That keeps the one thing a reviewing agent genuinely knows better — it has read the code — without letting every agent redraw the line.
 
 Ask, because you are guessing from a phrase. A reading that is silently one file wide reviews code the user did not ask about; one that is silently one file narrow misses the thing they did. Neither is visible in the output. Unattended: Agent S still runs, but nothing confirms it, so take its `in` set only when it returned no `unsure` at all — otherwise **widen to the whole diff and say so**, per the unattended table. An unreviewed boundary drawn by one agent and approved by nobody is the failure this whole section exists to prevent.
 
@@ -212,8 +214,8 @@ Three things the feature set governs, and three it does not:
 
 | Governs | Does not govern |
 |---|---|
-| What A, B and C review at all | What the scanner scans — **always the whole diff** |
-| Which findings are live in the report | What `<stem>.json` contains — always the full scan |
+| What A, B, C, D and E review at all | What the scanner scans — **always the whole diff** |
+| Which findings are live in the report, and which notes D writes | What `<stem>.json` contains — always the full scan |
 | Which findings reach the fix plan | What you may read for verification |
 
 **That first "does not" is load-bearing.** If a feature-scoped run wrote a narrowed `<stem>.json`, the next run's `--since` would compare a full baseline against a narrow one and report every out-of-feature finding as `resolved` — a page of "no longer true" claims about findings that are all still true. That is the same defect as running `--min-severity` before reconciliation, and it is the reason the filter lives at the report layer and touches nothing the scanner writes.
@@ -308,7 +310,9 @@ Five shapes, and the scope is in the name deliberately: Step 4's reconciliation 
 .code-winnow/
   env.sh                     this run's state
   declined.json              persistent across runs
+  perf-declined.md           persistent across runs — Agent D's notes the user dismissed
   <stem>.md                  this run's report
+  <stem>.notes.md            this run's performance notes (Agent D) — never applied
   <stem>.fixplan.md          this run's plan
   <stem>.json, .input.diff, .pre-fix/, .tests-*.list
   round-01/ … round-NN/      every previous run, archived by Step 2
@@ -316,9 +320,13 @@ Five shapes, and the scope is in the name deliberately: Step 4's reconciliation 
 
 **The root only ever holds the run in progress.** Step 2 moves the previous run's dated artifacts into the next `round-NN/` before writing anything, so "which report is current" is answered by looking at the root rather than by comparing timestamps in a flat pile of forty files. Prior rounds stay readable and stay reachable by `--since`; nothing is deleted.
 
+**The two persistent files survive that rotation for free, and the reason is worth knowing before anyone edits the glob.** The archive step matches `current*`, which is the stem prefix — so `<stem>.md` and `<stem>.notes.md` are swept into the round folder, while `declined.json` and `perf-declined.md` are not, because neither starts with `current`. That is what makes "declined" mean *permanently* declined rather than "declined until the next run archives the record". A rename that gave either file a stem-shaped name would silently turn every settled answer back into an open question.
+
 Stdlib only, no install step. Paths resolve against the git toplevel, so the cwd does not matter as long as it is inside the repo. The default pass gives in-scope findings; that is the run that matters. `--whole-files` widens to the untouched lines *of the files the diff already touches* — no further. There is no repo-wide mode; auditing anything else requires the user to name files with `--paths`, which means asking for it.
 
-It flags regex- and AST-level candidates: fields and locals declared and never referenced, fields only ever incremented and never read, locals assigned and never used, variables that just rename another for a single use, log-and-rethrow, empty Unity lifecycle methods, `async` with no `await`, unrooted `UObject*` **members**, invisible Unicode, comments restating the line below.
+It flags regex- and AST-level candidates: fields and locals declared and never referenced, fields only ever incremented and never read, locals assigned and never used, variables that just rename another for a single use, log-and-rethrow, empty Unity lifecycle methods, `async` with no `await`, unrooted `UObject*` **members**, invisible Unicode, comments restating the line below, and committed credentials in a recognised vendor format.
+
+**`committed-secret` is the one rule whose findings never enter the fix plan**, at any severity and however clearly they are worded. Deleting the line does not un-leak the credential — it is already in the object store, in every clone, and in every CI cache that fetched it. The fix is to rotate, which is not a behaviour-preserving edit and not this skill's business. Report it, say "rotate it", and propose no patch. A cleanup that quietly deleted the line would hand the user an all-clear they have not earned, which is worse than not detecting it.
 
 In test files it additionally flags tests with no assertion, assertions that cannot fail, tests whose every assertion checks a mock, structurally identical tests that differ only in literals, and skips with no reason. That pass runs for pytest/unittest, NUnit/xUnit/MSTest, GoogleTest, Go, Jest/Vitest/Mocha, JUnit, Rust, RSpec, and XCTest — a JS or Go test file gets it even though nothing else here understands JS or Go. `$WINNOW/references/tests.md` is the judgment standard.
 
@@ -451,7 +459,7 @@ Our own writes under `.code-winnow/` are excluded from the hash, so the run does
 
 **Guard the empty case.** On a clean tree with no branch diff, `--report-name` exits non-zero with empty stdout and nothing checks it. `$STEM` becomes the empty string, `$BACKUP` becomes `.code-winnow/.pre-fix`, every run writes to the same filenames, and successive runs overwrite each other — the exact failure the stem exists to prevent. Distinguish it from an interpreter failure: if `$PY` is unset, that is Step 1's problem, not an empty scope.
 
-**The baseline JSON is written here, not in Step 4.** Step 3 hands it to three agents, so it has to exist before they are dispatched; writing it two steps later left them with a path to a file that was not there yet. Step 4 no longer writes it — it reads it, and reconciles against the *previous* run's JSON, never this one's.
+**The baseline JSON is written here, not in Step 4.** Step 3 hands it to every judgment agent, so it has to exist before they are dispatched; writing it two steps later left them with a path to a file that was not there yet. Step 4 no longer writes it — it reads it, and reconciles against the *previous* run's JSON, never this one's.
 
 ## Step 3 — Judgment pass, by a separate agent
 
@@ -508,11 +516,11 @@ For `--paths`, the input is the named files' full contents instead.
 
 `git diff HEAD` — not `--cached` and plain `diff` separately. Those number the index blob and the worktree blob respectively, and the agents are reading the worktree.
 
-**Branch on what the scanner reports, not on the flag you passed.** `--scope auto` falls back to the branch diff on its own whenever the tree is clean, so a reviewer one commit ahead never passes `--scope branch` and still gets a branch review. Build the input from `git diff HEAD` in that state and it is empty — three agents receive nothing, report nothing to review, and the run looks clean while the scanner holds a P1. The scanner's `scope` string is the one place the fallback decision is recorded.
+**Branch on what the scanner reports, not on the flag you passed.** `--scope auto` falls back to the branch diff on its own whenever the tree is clean, so a reviewer one commit ahead never passes `--scope branch` and still gets a branch review. Build the input from `git diff HEAD` in that state and it is empty — every agent receives nothing, reports nothing to review, and the run looks clean while the scanner holds a P1. The scanner's `scope` string is the one place the fallback decision is recorded.
 
 Three further guards in that block, all against the same silent-empty failure:
 
-**The `-s` check refuses to dispatch on an empty input.** Whatever new way this breaks, an empty review file must never reach three agents that will each confidently report nothing.
+**The `-s` check refuses to dispatch on an empty input.** Whatever new way this breaks, an empty review file must never reach a fan-out of agents that will each confidently report nothing.
 
 **The `|| git diff --cached` fallback.** On a repo with staged files and no commit yet, `git diff HEAD` is fatal — there is no `HEAD` to diff against — but the `{ }` group still exits 0 and the redirect still creates an empty file. That state is a fresh repo mid-first-commit, and "clean this up before I commit" is this skill's headline trigger.
 
@@ -532,15 +540,19 @@ Dispatch the agents **in parallel** (see `superpowers:dispatching-parallel-agent
 
 Each agent has to check for itself. The orchestrator's `SNAPSHOT` comparison catches a change before dispatch and after return, but not one landing *during* — and the parallel window is exactly when the user is most likely to still be working. An agent that quietly renumbers around a moved line produces findings whose anchors all fail at Step 5, reported there as "stale" with no trace of the cause.
 
-**Division of labour, so their outputs merge cleanly — three agents, three different questions.** A fourth, **Agent S**, ran already: it drew the feature boundary in Step 1 and is finished before any of these start. These three work inside the boundary the user confirmed and do not redraw it; they may appeal it, and an appeal goes to the user, not into their findings.
+**Division of labour, so their outputs merge cleanly — one agent, one question.** **Agent S** ran already: it drew the feature boundary in Step 1 and is finished before any of these start. These work inside the boundary the user confirmed and do not redraw it; they may appeal it, and an appeal goes to the user, not into their findings.
 
-| | Owns | The question it answers |
-|---|---|---|
-| **A** | Code. Not comments, not documentation files | Does this line earn its place? |
-| **B** | Every comment and docstring | Does this comment earn its space? |
-| **C** | Documentation files, file headers, and doc-versus-code truth | Is this still true, and does it match the repo? |
+| | Owns | The question it answers | Runs |
+|---|---|---|---|
+| **A** | Code. Not comments, not documentation files | Does this line earn its place? | Always |
+| **B** | Every comment and docstring | Does this comment earn its space? | Always |
+| **C** | Documentation files, file headers, and doc-versus-code truth | Is this still true, and does it match the repo? | Conditional |
+| **D** | Runtime cost of code the diff added | Does this do more work than it needs to, at a frequency that matters? | Conditional |
+| **E** | Silent failure and fragility, including protections the diff removed | How does this break, and why does the suite stay green? | Whenever A does |
 
-If A notices a comment, it belongs to B. If B notices that a docstring is factually wrong, that is C's. The overlaps are real and Step 3.5 resolves them; do not have the agents negotiate.
+If A notices a comment, it belongs to B. If B notices that a docstring is factually wrong, that is C's. If D notices dead code, that is A's. If A notices that a deletion it is proposing would break something invisible to the compiler, that is E's, and E outranks it. The overlaps are real and Step 3.5 resolves them; do not have the agents negotiate.
+
+**A, B and E are the ones that always run**, so a diff with no docs and no hot path still gets code, comments and silent-failure coverage. C and D are conditional because their trigger is a property of the diff — no doc surface, nothing for C; no loop and no hot path, nothing for D. There is no equivalent exemption for E: a one-line change is enough to add a swallowed exception.
 
 **If a feature was named in Step 1, say so in every prompt** and list the file and hunk set. Add: *"Findings only from these hunks. You may read anything; report nothing else."*
 
@@ -595,9 +607,49 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 > **Missing is not the same as wrong, and only one of them is P2.** Copyright subsists without notice under Berne, so a new internal file carrying no boilerplate has close to no legal consequence — calling that a compliance gap overstates it, and P2 is inside "fix all", which is exactly where a header edit must never be. A header asserting the wrong licensor is a misstatement of fact and stays P2.
 > Return findings as `docpath:line — the claim → the diff line that falsifies it (path:line) → proposed rewrite`, with the same required `anchor:` / `occurrence:` / `of:` / `evidence:` fields Agent A uses, on the same terms — a doc line is located at execution time by exactly the same machinery, and doc files are the ones most likely to have shifted since you read them. **Establish `occurrence` and `of` by counting matching lines yourself**: a doc the diff never touched was never scanned, so there is no JSON row to copy them from, and a repeated line like `Call \`Dash.Charge()\` before the cooldown elapses.` is exactly the shape that repeats in a document. Report header-convention conflicts separately, as a count and a sample, not as one finding per file.
 
+**Agent D — performance notes.** Dispatch **only** when the diff adds or modifies a loop, comprehension, or recursive call; puts code inside a per-frame, per-tick, per-request or per-item entry point; adds I/O, a query, a lock, or an allocation inside either; or changes a data structure or algorithm on a path already marked hot. Otherwise skip it and say so in one line in the report. There is no reason to pay for an agent on a diff that renames a local.
+> **Read `$WINNOW/references/performance.md` before anything else.** It is the whole standard for this pass and the rest of this prompt is a summary of it. Read the language file matching the diff as well.
+> **Nothing you produce is ever applied.** Your output is a notes document, not findings. It does not enter the report, it does not enter the fix plan, and no edit will be made from it. That is not a comment on the quality of your notes — it is the honest consequence of the fact that you cannot measure. Write accordingly: a note is a hypothesis offered to a human, not an instruction.
+> **The gate: name the frequency, or you do not have a note.** Every note states how often the code runs and how you established that — the enclosing `Update()`, the request handler it sits in, the loop bound, the caller you traced. If you cannot finish the sentence "this runs N times per X", stop. What you have is a preference about how the code is written, and Agent A owns that question. Startup and once-per-process code cannot pass this gate and are therefore ineligible, however wasteful they look.
+> **No micro-optimization and no readability trades.** If the win is invisible without a profiler, or the faster form is harder to read and you have not measured, it is not a note.
+> **Do not repeat the scanner.** `perframe-lookup`, `perframe-linq`, `expensive-lookup`, `pass-by-value` and `eager-log-format` are ordinary findings in the main report and the fix plan already. Noting them here double-counts them.
+> **Never touch a trust boundary**, and never report a comment or dead code — those belong to B and A.
+> **Return format**, one entry per note, and `measured:` is required:
+> ```
+> - path:line — what
+>   frequency:  <how often it runs, and how you know>
+>   reasoning:  <why it costs more than it needs to>
+>   suggestion: <the change, or "unclear — flagging the cost only">
+>   measured:   <the benchmark you ran, or the word `no`>
+> ```
+> `measured: no` is the expected answer and is not a defect in the note. Only write a benchmark here if you actually ran one.
+> **You will be given `.code-winnow/perf-declined.md` if it exists.** Skip any note matching an entry — match on path plus anchor text and ignore the line number, since lines shift — and report the count you skipped rather than listing them. The user already answered those.
+> Order notes by the strength of the frequency argument, not by guessed impact. Guessed impact is a second unmeasured number stacked on the first.
+
+**Agent E — silent failure and fragility.** Dispatch whenever A is dispatched. There is no trigger condition: a one-line change is enough to add a swallowed exception.
+> **Read `$WINNOW/references/fragility.md` before anything else**, plus `$WINNOW/references/core-patterns.md` — its directive-comment table is half of what you are checking — and the language file matching the diff.
+> **The gate, and both halves are required. Name how it breaks, and name why the suite stays green.**
+> *How does it break?* What goes wrong, when, and under what condition. "This is fragile" is not a failure mode. "On a save written before this change, `dashCharges` deserializes to 0 and the player cannot dash" is.
+> *Why does no test catch it?* The suite only creates fresh saves. Nothing exercises the throw path. The failure needs two threads.
+> **If a test would catch it, it is not your finding** — it is an ordinary bug, and bug hunting is out of scope here. **If you cannot say how it breaks, it is a style opinion**, and Agent A owns those. Hand it over or drop it. A report full of unfalsifiable "this might race" warnings is worse than one that omits them.
+> **This is not a security review and you must not go looking for vulnerabilities.** One security-shaped thing is yours and only one: a protection **this diff removed**. A validation or bounds call deleted from a handler, an auth or ownership assertion dropped, `verify=True` → `False`, `strict` or `validate_certs` disabled, an escape or sanitize call gone, a timeout or size limit removed, or a newly *added* `# nosec` / `# noqa: S…` suppression. **Quote the removed line from the diff's `-` side and name the caller you traced.** If you cannot show the line the diff removed, you do not have this finding — you have a suspicion about existing code, which is out of scope. P1 for a removed check on a reachable path, P2 for a newly-added suppression.
+> **You outrank Agent A on deletions.** A proposes removing code; you are the reader who knows what removal breaks. When you see a line that is load-bearing in a way the compiler cannot see — a GC root, a directive comment, a type carrier, a trust-boundary check, a registration anchor, a side-effect import — say so plainly and name the mechanism, whether or not A flagged it. Step 3.5 gives you the deciding vote.
+> **Severity: P1** for silent corruption, silent data loss, a removed protection on a reachable path, or any failure with no observable signal. **P2** for fragility that surfaces loudly but that nothing tests, and for a newly-added suppression. **You should essentially never produce a P3** — if it is cosmetic, it failed the gate and it is A's.
+> **Many of your findings will not be fixable by this skill, and that is expected.** A fix here must preserve behaviour. Adding a missing `await`, narrowing a catch, restoring a removed validation call, stopping a coroutine in `OnDisable` — those are fixable. A save migration, a cache invalidation strategy, a locking scheme — those are design decisions. Write `fix: out of scope — <why>` and propose nothing. Do **not** lower the severity because you cannot fix it; it is reported at P1 either way.
+> **Return format**, and the first three fields are required on every finding:
+> ```
+> path:line — what
+> breaks:   <how and when it fails — runtime / build / CI / only under condition X>
+> no test:  <why the suite stays green>
+> fix:      <the behaviour-preserving change, or "out of scope — <why>">
+> ```
+> On any finding whose fix is *not* out of scope, add the same required `anchor:` / `occurrence:` / `of:` / `evidence:` fields Agent A uses, on the same terms — those items enter the fix plan and are located by exactly the same machinery. A finding marked `fix: out of scope` needs none of them; nothing is going to be located.
+
 **Two searches, two different rules.** Reading a neighbouring file to learn the repo's conventions is capped at three files, is read-only, and produces no findings — it is the only reason to *review* a file the diff did not touch. Grepping the repo to check whether a helper already exists, whether a caller relies on a guard, whether a scene references a field, or which doc describes a changed function is verification, is uncapped, and produces no findings of its own. Everything else in the scope rules stands.
 
-Serial fallback if the runtime has no subagents: run A, then B, then C yourself, and say once in the report that the judgment pass was self-review.
+Serial fallback if the runtime has no subagents: run A, then B, then C, then D, then E yourself, and say once in the report that the judgment pass was self-review.
+
+**On a serial run, E's veto is the thing most likely to be lost, and it is the one worth protecting.** Running the passes yourself means A's proposed deletions and E's objections to them are formed by the same reader, in one context, minutes apart — so the objection arrives after you have already talked yourself into the deletion. Do E's pass over A's proposed removals **as a separate reading**, against `fragility.md`, before writing either into the report. The parallel run gets this for free by construction; a serial run has to spend the effort deliberately.
 
 **Agent S has no serial fallback worth the name, and the report must say so.** Its whole value is that a reader with no design rationale drew the boundary; doing it yourself restores exactly the conflict it exists to remove. Draw it, confirm it with the user as usual, and record in the report that the scope was self-drawn — that line is what tells a later reader which decision to distrust if something turns out to have been left out.
 
@@ -615,7 +667,7 @@ The split that keeps the agents' outputs mergeable also blinds A to the one thin
 
 A comment is adjacent to a finding when it is on the same line as the finding's `anchor`, in the contiguous comment block immediately above it, or the docstring of the declaration the anchor sits in. Nothing further away pairs — a comment three functions up is not evidence about this line.
 
-### The seven classes
+### The ten classes
 
 | | Situation | Resolution |
 |---|---|---|
@@ -626,8 +678,13 @@ A comment is adjacent to a finding when it is on the same line as the finding's 
 | **X5** | C says a docstring is false; B says TIGHTEN or KEEP | **Truth beats concision.** C wins, and B's rewrite must carry the corrected fact. If B said DELETE, that already resolves it — one finding |
 | **X6** | A deletes a symbol; C reports a doc that documents it | **One** merged finding naming both locations: delete the code, update the doc. Two edits, one decision |
 | **X7** | B says DELETE or TIGHTEN a file header that C identifies as the repo's convention | **KEEP it verbatim.** Headers are boilerplate on purpose; concision does not apply to them, and a header that matches 200 other files is doing its job precisely by being identical |
+| **X8** | A proposes deleting a line D wrote a note about | **The deletion wins.** Drop the note and count it. A note about a line that is going away is noise, and kept alongside, the report and the notes document contradict each other. If A proposes a *rewrite* rather than a deletion, keep the note and mark it `re-check after applying` |
+| **X9** | A proposes deleting a line E identifies as load-bearing | **E wins** — below |
+| **X10** | A and E flag the same line for the same underlying reason | **One** merged finding at the higher severity, carrying E's `breaks:` and `no test:` fields. Two entries for one edit is the same defect as X3 |
 
 X5, X6 and X7 do not arise when C was not dispatched. When it was not, B's one-line notes about comments or docstrings it suspected were false still reach the report — as P3 "unverified doc claim", never dropped. A suspicion nobody checked is worth less than a verified finding and more than silence.
+
+X8 does not arise when D was not dispatched. X9 and X10 always can, since E runs whenever A does.
 
 Findings outside the confirmed scope never enter this step — arbitrating something nobody is going to act on spends judgment on a byproduct. Scope appeals are not conflicts either: they go to the user with the report, not through these rules.
 
@@ -662,13 +719,28 @@ Never propose deleting the code and keeping the comment, or the reverse. Those t
 
 **Match on the defect, not the severity label.** Those findings arrive as P1 *or* P2 depending on language and shape — a Jest test whose only assertion is `toHaveBeenCalled()` is P2, not P1. A floor written as "nothing dismisses a P1" would let the commonest form of the defect through on a technicality. `$WINNOW/references/tests.md` has both tables, and the carve-out that matters in the other direction: a test with no assertion that fails by crashing — an import smoke test, a does-not-crash regression — is not false coverage and is dismissible with one line naming it.
 
+### X9 — E vetoes the deletion
+
+**When E names a mechanism that makes a line load-bearing, A's finding is dismissed.** It moves to "Deliberately left alone" with E's reason quoted, and it does not reach the fix plan. The mechanisms are the ones in the Step 6 deletion-safety list and in `$WINNOW/references/fragility.md`: a GC root or callback reference, a directive comment, a type carrier, a trust-boundary check, a registration anchor, a side-effect import, a serialized field an asset reads.
+
+**This is the payoff of running E at all, and it is worth being explicit about why.** Step 6's deletion-safety pass asks these same questions *after* the edits land, and its remedy is to restore the file from the backup. X9 asks them before the fix plan is written, so the bad deletion is never approved — the user never sees it offered, never says yes to it, and nothing has to be reverted.
+
+**Both passes stay, and neither is redundant.** The fix plan is a user-edited subset of what E reviewed: the user can delete items, and a cold Step 5 session executes a plan without E's output in front of it. Step 6 is the check that runs against what was *actually removed*, which is not knowable here.
+
+**E must name the mechanism, not merely object.** "This looks load-bearing" is not a veto — it is the style opinion E's own gate excludes. If E cannot say what breaks and why no test catches it, A's finding stands on A's evidence, and the disagreement is reported as a confirm-question at A's severity rather than silently resolved either way.
+
+**One direction only: E can save a line, never condemn one on A's behalf.** If E thinks something *should* be deleted and A did not flag it, that is not a veto and not a merge — it is an ordinary E finding, and it needs E's own gate satisfied like any other.
+
 ### Output
 
 A merged finding list, and one line for the report:
 
 ```
-Conflict check: 3 dismissed on comment evidence, 2 merged, 1 upgraded (comment contradicted by lookup).
+Conflict check: 3 dismissed on comment evidence, 2 merged, 1 upgraded (comment
+contradicted by lookup), 2 deletions vetoed by E, 1 perf note dropped (line deleted).
 ```
+
+Report every count, including the zeroes that matter. "0 deletions vetoed by E" on a diff where A proposed twelve deletions is a fact about the run; an omitted count reads as though the check was not made.
 
 Unattended runs execute this step normally — it needs no user input.
 
@@ -736,10 +808,15 @@ Generated: <YYYY-MM-DD HH:MM>
 Scope: <diff source> — <current branch> vs <base / worktree / staged>
 Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
 Feature: <name> — <N> of <files> files          (omit when none was named)
-Passes: S scope, A chaff, B comments, C docs+headers  (say which ran; if C was skipped, why;
-        if S was self-drawn rather than dispatched, say that too)
+Passes: S scope, A chaff, B comments, C docs+headers, D performance, E silent-failure
+        (say which ran; if C or D was skipped, why; if S was self-drawn rather than
+        dispatched, say that too)
 Scope appeals: <n> — listed below, unresolved   (omit when none)
-Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded
+Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded,
+        <n> deletions vetoed by E, <n> perf notes dropped
+Performance notes: <n> — .code-winnow/<stem>.notes.md (not applied)
+        (or: "D skipped — no loops or hot-path entry points in this diff")
+Not fixable here: <n> P1/P2 findings reported but needing a design change   (omit when none)
 Previous run: <prior stem, or "none">
 
 ### P1 — Risk (behavior, security, test integrity)
@@ -777,9 +854,19 @@ Every count in that header comes out of the JSON: `files`, `scanned_files`, `add
 
 Severity:
 
-- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode in real source (zero-width, non-breaking, bidi — *not* a leading BOM; **inside a test file** the scanner demotes these to P2, and a non-breaking space or soft hyphen to P3 in a test *or* prose file — everything else in a prose file stays P1), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, machine names or secrets
-- **P2** — speculative abstraction, defensive checks in trusted paths, unused fields, duplicated helpers, dead scaffolding, config knobs nothing sets, structurally duplicate tests, unused fixtures, `except SpecificError: pass`, `/home/...` paths
-- **P3** — comments restating code, generic naming, formatting churn on untouched lines, em dashes and smart quotes *in code* (the scanner exempts **whole-line** comments, Python triple-quoted regions and prose files; it does **not** exempt a trailing comment on a code line, nor string literals, so leave typography alone in localized and user-facing strings yourself)
+- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode in real source (zero-width, non-breaking, bidi — *not* a leading BOM; **inside a test file** the scanner demotes these to P2, and a non-breaking space or soft hyphen to P3 in a test *or* prose file — everything else in a prose file stays P1), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, committed credentials in a recognised vendor format (**not** demoted in a test or prose file, and never fix-plan eligible — rotate, do not delete). **From E:** silent corruption or data loss, a persisted surface changed with no migration, any failure with no observable signal
+- **P2** — speculative abstraction, defensive checks in trusted paths, unused fields, duplicated helpers, dead scaffolding, config knobs nothing sets, structurally duplicate tests, unused fixtures, `except SpecificError: pass`, `/home/...` paths, UNC paths naming an internal host, a credential-named variable assigned a literal in a test or prose file. **From E:** fragility that surfaces loudly but that nothing tests, a newly-added suppression, a constant duplicated where it will desync
+- **P3** — comments restating code, generic naming, formatting churn on untouched lines, em dashes and smart quotes *in code* (the scanner exempts **whole-line** comments, Python triple-quoted regions and prose files; it does **not** exempt a trailing comment on a code line, nor string literals, so leave typography alone in localized and user-facing strings yourself). **E should essentially never land here** — a cosmetic E finding failed its own gate and belongs to A
+
+**"Validation removed from a trust boundary" was already a P1 before Agent E existed**, and nothing enforced it — no scanner rule detects it and no agent was asked to look. E is what makes that line true rather than aspirational, which is worth knowing if you are wondering what a fragility pass buys over the severity table that was already there.
+
+### Findings that cannot be fixed here
+
+E produces findings whose fix is a design decision — a save migration, a cache invalidation strategy, a locking scheme, a schema backfill. Step 5b binds every fix to preserving behaviour, so these are reported and left. **Every `committed-secret` finding is in this category too**, for a different reason: the repair is to rotate the credential, and deleting the line only hides it from the working tree while it stays in history.
+
+**They stay at their own severity and stay in the P1 or P2 list.** Do not demote them for being unfixable, do not move them to a separate section, and do not move them into the performance notes. A P1 that this pass cannot repair is still a P1 the user needs to see today, and every mechanism for tidying it away — demotion, a side heading, a separate document — ends with it below the fold. Mark the item `fix: out of scope — <why>`, count them in the header's `Not fixable here:` line, and leave them where the severity puts them.
+
+The fix plan omits them, so "fix all" cannot sweep them up. That is the only place the distinction has any mechanical effect, and it is enough.
 
 The "deliberately left alone" section matters more than it looks. Showing what you considered and rejected is what makes the rest credible — and it stops the next run re-flagging the same lines.
 
@@ -787,11 +874,62 @@ If a P3-only list runs past a screen, cut it. Twenty cosmetic nits train the use
 
 **Never cut "Author claims — confirm", and never sort it by severity.** Those items keep the severity they had before the comment was considered, and each one is a question only the user can answer in two seconds. Folding them into P3 is what makes the nine-character attack work: append `(see #4821)` to a comment above `except Exception: pass`, the lookup is unperformable in most runtimes, and a demoted item lands under "Cosmetic" and gets trimmed for length. A silent-data-loss P1 disappears for twenty-two characters of generated comment.
 
+### The performance notes document
+
+Agent D's output goes to `.code-winnow/$STEM.notes.md` and nowhere else. It is not a section of the report, and **nothing in it enters the fix plan or is ever applied.**
+
+```markdown
+# Performance notes — currentfeature-dash_targetmain_20260803-1420
+
+Scope:    12 files in diff, 3 in feature "dash cooldown"
+Source:   Agent D, judgment pass. Nothing here is in the fix plan.
+Status:   NOT APPLIED — hypotheses, not approved changes.
+Declined: 2 previously declined, not repeated
+
+## Notes
+
+- src/Grid.cs:22 — neighbour scan is O(n²)
+  frequency:  once per FixedUpdate, 50/sec, over ~400 entities
+  reasoning:  nested for over `entities` inside `entities`, neither bounded
+  suggestion: spatial hash, or bail on the distance check first
+  measured:   no
+```
+
+**Never write `- [ ]` and never write a `file:` line in this document.** Those are the two tokens Step 5a's parser keys on to find fix items and the paths to back up. A notes document that used them would parse as a fix plan — and a plan is a thing an executor edits files from. The differing filename is the first guard and this is the second, because the failure is silent and irreversible where every other guard here costs a re-run.
+
+For the same reason the document carries `Status: NOT APPLIED`, which is not the `Status: APPROVED` the plan parser requires. Three independent things would have to go wrong together.
+
+**Write the document even when D found nothing** — an empty Notes section and a line saying the pass ran. A missing file is indistinguishable from a pass that was skipped, and those are different facts. When D was not dispatched at all, write no document and say so in the report header instead.
+
+### Performance notes the user declined
+
+Same problem as declined findings, same shape of answer. D produces notes from judgment rather than from a scanner rule, so `--since` and `declined.json` cannot reach them: without somewhere to record a rejection, the same five notes come back verbatim on every run until the code changes.
+
+Keep `.code-winnow/perf-declined.md`. When the user dismisses a note, append it with the reason:
+
+```markdown
+# Declined performance notes
+
+Persistent across runs. Delete an entry to re-open the question.
+Matched on path plus anchor text; the line number is ignored, because lines shift.
+
+- src/Dash.cs | GetComponent<Rigidbody>() in Update
+  declined 2026-08-03 — profiled at 0.02ms, not hot
+- src/Boot.cs | config parsed twice at startup
+  declined 2026-08-03 — startup only, don't care
+```
+
+Hand it to D on every later run. D skips matches and reports the count rather than listing them.
+
+**Matching is by path plus anchor, never by line number** — the same rule `declined.json` follows and for the same reason. A note declined at line 22 is the same note when an unrelated edit moves it to line 40, and matching on the line would resurrect it.
+
+This file is persistent: it lives beside `declined.json` and is not archived into a round folder, because its name does not start with the stem prefix the rotation matches. See the layout block in Step 2 — that property is load-bearing and easy to break with a rename.
+
 ### Findings outside the named feature
 
 Only when Step 1 resolved a feature. Same discipline as pre-existing flaws, for the same reason: it is a courtesy, and a courtesy that takes over the report stops being one.
 
-This is what the scanner found outside the confirmed scope, plus anything A, B or C happened to notice at its edges. **Nobody swept for it** — no agent reviewed those files, and the scanner had already run over the whole diff anyway. Report it as a courtesy: top three by severity, a count for the rest, two sentences each, no proposed patches, no severity debate.
+This is what the scanner found outside the confirmed scope, plus anything A, B, C, D or E happened to notice at its edges. **Nobody swept for it** — no agent reviewed those files, and the scanner had already run over the whole diff anyway. Report it as a courtesy: top three by severity, a count for the rest, two sentences each, no proposed patches, no severity debate.
 
 ```
 ### In the diff, outside "dash cooldown"  (not swept)
@@ -1004,7 +1142,7 @@ A fix applied to the wrong line is the worst outcome available in this whole ski
 
 ### Then choose a rung
 
-By Step 5 you are carrying the diff, the scanner JSON, three agents' outputs, the conflict check, the report, and the approval conversation. The fix loop — edit, test, reconcile, sometimes debug — is the part of the run that most needs headroom and least needs that history.
+By Step 5 you are carrying the diff, the scanner JSON, every agent's output, the conflict check, the report, the performance notes, and the approval conversation. The fix loop — edit, test, reconcile, sometimes debug — is the part of the run that most needs headroom and least needs that history.
 
 **Rung 1 — clear and resume. Offer this first.**
 
@@ -1250,6 +1388,8 @@ Once verification passes, the backup from Step 5a has done its job. Say where it
 
 **Run this on every run, before the test comparison above.** It was once written as a fallback for runtimes lacking `superpowers:requesting-code-review`, which had it exactly backwards: installing the recommended reviewer bought you *less* safety, silently. A cold reviewer reads the diff as it now stands and does not know which lines you removed — this pass is the only thing in the run that checks the removals themselves, and it is five questions.
 
+**Agent E asked these same five questions in Step 3, and that does not make this pass redundant.** E asked them about lines A *proposed* removing, and its veto (X9) stopped the worst ones from reaching the plan. This asks them about lines that were *actually* removed — which is a different set, because the user edits the plan, items go stale and get skipped, and a cold Step 5 session executes without E's output in front of it. E prevents; this verifies. Run it even on a run where E vetoed nothing.
+
 **Re-run every `evidence:` command behind an applied deletion and read the delta. Equality is the wrong test here.** These commands are *pre*-conditions: `git grep -c cachedRig -- '*.cs'` returned 3 at plan time **because the field was still there**, and after the approved deletion it returns nothing. Requiring the output to "still match" fails every correct deletion — the only evidence that survives a deletion unchanged is evidence that proved nothing.
 
 Three readings, per item:
@@ -1316,6 +1456,7 @@ These look like chaff and are load-bearing:
 
   This is not a blanket pass for test files, and treating it as one is how false coverage survives review. A test that asserts nothing, asserts a tautology, or asserts only that a mock was called is not scaffolding — it is a test that cannot fail, and P1 is the right severity for it. The fix is almost always to tighten the assertion, never to delete the test: removing a test is a coverage regression wearing a cleanup costume. See `$WINNOW/references/tests.md`.
 - **File headers matching the repo's convention** — a copyright or license block identical across two hundred files is doing its job by being identical. Concision does not apply to boilerplate that exists to be uniform. Headers are only ever edited through the Step 4 gate, only on files the diff already touched, and never to make the repo consistent with itself.
+- **Anything a line E calls load-bearing** — a GC root, a directive comment, a type carrier, a trust-boundary check, a registration anchor, a side-effect import. E's veto in Step 3.5 outranks A's deletion, and the finding moves to "Deliberately left alone" with the mechanism named.
 - **Anything outside the diff** — report it under Pre-existing, in two sentences, and move on. The one exception is a documentation line the change made false, which Agent C reports with both lines cited.
 - **Anything outside the named feature**, when the user named one — the boundary Agent S drew and the user confirmed. It goes in the outside-the-feature section as a byproduct and is not eligible for a fix. An `unsure` file, or an agent's appeal to move the line, is a question for the user — never something you settle yourself.
 

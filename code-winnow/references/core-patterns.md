@@ -189,7 +189,18 @@ Delete that and the GC collects the marshalled delegate — an intermittent nati
 
 **Typographic characters — em dashes, en dashes, smart quotes — in code.** **P3, not P1.** They are visible, and they only cost you a grep that does not match. Delete them in identifiers and in code you expect to search. **Leave them in comments, docstrings, prose files, and user-facing copy** — localized `FText`/`LocalizedString` strings are supposed to use real typography, and "fix" that and you have degraded the product to satisfy a linter. The scanner agrees: P3, and it exempts whole-line comments, Python triple-quoted regions and prose files. It does **not** exempt a comment sharing a line with code, nor string literals - so check trailing comments and localized strings yourself before accepting one.
 
-**Absolute paths into a developer home directory** (`/Users/name/…`, `C:\Users\name\…`) committed in config or test fixtures. **P1.** A `/home/name/…` path is a P2 — half the containers alive use one as a deployment path. Either one drops a step inside a path-handling test or a documentation file, where it is data or an example rather than a leak. **Machine names or credentials: P1 always.**
+**Absolute paths into a developer home directory** (`/Users/name/…`, `C:\Users\name\…`) committed in config or test fixtures. **P1.** A `/home/name/…` path is a P2 — half the containers alive use one as a deployment path. Either one drops a step inside a path-handling test or a documentation file, where it is data or an example rather than a leak.
+
+**Committed credentials.** **P1.** Two halves with different confidence, and they behave differently:
+
+- **A recognised vendor format** — an AWS key id, a `ghp_`/`github_pat_`/`glpat-` token, a Slack `xox…`, a Stripe `sk_live_`, a Google `AIza…`, an npm or SendGrid token, or a `-----BEGIN … PRIVATE KEY-----` block. These are self-identifying by prefix, so the match is on a *format* rather than a guess. **P1 everywhere, including test and prose files** — the one rule here that does not demote in a fixture, because a live credential is not data and a test fixture is where keys most often leak.
+- **A credential-named variable assigned a literal** — `password = "…"`, `api_key: "…"`. This is a guess about intent, so it demotes to P2 in a test or prose file, and it skips anything that looks like a placeholder: template syntax (`${…}`, `{{…}}`, `<your-key>`), a value of one or two repeated characters, or any of the usual filler words.
+
+**There is deliberately no entropy heuristic.** Hashes, UUIDs, base64 blobs and minified bundles all look random, so a "high-entropy string" rule fires constantly on files holding no secret at all. This skill's standing position is that a noisy rule is worse than a missing one — the reader learns to skim, and what they skim past is the P1 three sections down. Structured formats only.
+
+**Never propose deleting a committed secret as if that fixed it.** The line is already in the object store, and in every clone and every CI cache that fetched it. The finding says *rotate it*; removing the line is cleanup after the rotation, not a substitute for it, and a report that proposes the deletion alone hands the user a false all-clear. This is why a secret is reported and never enters the fix plan.
+
+**Internal host names.** **P2**, P3 in a test file. Narrow on purpose: only a UNC path (`\\HOST\share`), which unambiguously names an internal machine. Hostnames in general are unmatchable without flagging every domain in every URL, and the coverage is not worth that noise.
 
 **Duplicated helper.** A utility written fresh that already exists in the repo.
 *Test:* grep for the function's core operation before accepting any new helper.

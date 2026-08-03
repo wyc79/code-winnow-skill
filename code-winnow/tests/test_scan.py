@@ -1721,3 +1721,223 @@ def test_tautological_assert_fires_in_a_brace_language_test(tmp_path):
           "test('total', () => {\n  expect(total).toBe(total);\n"
           "  expect(sum(1, 2)).toBe(3);\n});\n")
     assert "tautological-assert" in rules(str(tmp_path), "--paths", "app.test.js")
+
+
+# --------------------------------------------------------------------------
+# committed secrets
+#
+# core-patterns.md claimed "machine names or credentials: P1 always" for a
+# long time while no rule detected either - the doc asserted coverage the
+# scanner did not have, which is the exact failure the report rules elsewhere
+# call out. These pin what is actually implemented.
+# --------------------------------------------------------------------------
+
+def test_aws_access_key_is_a_p1(tmp_path):
+    write(tmp_path, "conf.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLQ"\n')
+    assert severities(str(tmp_path), "--paths", "conf.py")[
+        "committed-secret"] == ["P1"]
+
+
+@pytest.mark.parametrize("literal, why", [
+    ("ghp_" + "a" * 36, "GitHub personal access token"),
+    ("github_pat_" + "b" * 30, "GitHub fine-grained PAT"),
+    ("glpat-" + "c" * 20, "GitLab PAT"),
+    ("xoxb-1234567890-1234567890-" + "d" * 24, "Slack bot token"),
+    ("sk_live_" + "e" * 24, "Stripe live key"),
+    ("sk-ant-" + "f" * 24, "Anthropic key"),
+    ("AIza" + "g" * 35, "Google API key"),
+    ("npm_" + "h" * 36, "npm token"),
+])
+def test_vendor_token_formats_are_detected(tmp_path, literal, why):
+    """Each is self-identifying by prefix, which is what makes matching a
+    format rather than guessing at entropy safe enough to run everywhere."""
+    write(tmp_path, "c.py", f'KEY = "{literal}"\n')
+    assert "committed-secret" in rules(str(tmp_path), "--paths", "c.py"), why
+
+
+def test_private_key_block_is_a_p1(tmp_path):
+    write(tmp_path, "id.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n")
+    assert severities(str(tmp_path), "--paths", "id.pem")[
+        "committed-secret"] == ["P1"]
+
+
+def test_pkcs8_private_key_header_is_detected(tmp_path):
+    """The bare form carries no algorithm word, so a pattern requiring one
+    misses the commonest modern export."""
+    write(tmp_path, "k.pem", "-----BEGIN PRIVATE KEY-----\nMIIE\n")
+    assert "committed-secret" in rules(str(tmp_path), "--paths", "k.pem")
+
+
+def test_a_vendor_token_in_a_test_file_is_still_a_p1(tmp_path):
+    """Every other universal rule demotes in a test file, because a home path
+    in a fixture is data. A live credential is not data - and a test fixture
+    is where keys most often leak, not a special case that earns leniency."""
+    write(tmp_path, "tests/test_api.py",
+          f'TOKEN = "ghp_{"z" * 36}"\ndef test_x():\n    assert call(TOKEN)\n')
+    assert severities(str(tmp_path), "--paths", "tests/test_api.py")[
+        "committed-secret"] == ["P1"]
+
+
+def test_named_password_assignment_is_flagged(tmp_path):
+    write(tmp_path, "db.py", 'password = "Tr0ub4dor&3xx"\n')
+    assert "committed-secret" in rules(str(tmp_path), "--paths", "db.py")
+
+
+@pytest.mark.parametrize("value", [
+    "xxxxxxxxxx", "----------", "0000000000",
+    "${DB_PASSWORD}", "{{ vault_password }}", "<your-api-key>", "%(passwd)s",
+    "changeme", "your-secret-here", "REDACTED", "placeholder-value",
+    "example-key-1", "not-a-real-password",
+])
+def test_placeholder_values_are_not_flagged(tmp_path, value):
+    """The rule fires on the assignment shape, so every redacted config and
+    every documented example matches it. A secrets rule that cries wolf is
+    worse than none: the reader learns to skim, and skims past the P1."""
+    write(tmp_path, "conf.py", f'api_key = "{value}"\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "conf.py"), \
+        f"{value!r} is a placeholder, not a credential"
+
+
+def test_env_var_read_is_not_a_secret(tmp_path):
+    """The correct pattern must never be flagged - there is no literal."""
+    write(tmp_path, "conf.py",
+          'password = os.environ["DB_PASSWORD"]\n'
+          'api_key = get_secret("api_key")\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "conf.py")
+
+
+def test_a_type_annotation_is_not_a_secret(tmp_path):
+    write(tmp_path, "m.py", "class C:\n    password: str\n    api_key: str\n")
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "m.py")
+
+
+def test_password_comparison_is_not_flagged_as_an_assignment(tmp_path):
+    """`==` is the shape of a test assertion far more often than a leak, and
+    the assignment pattern must not swallow it by matching the first `=`."""
+    write(tmp_path, "auth.py", 'if password == "s0mething-l0ng":\n    pass\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "auth.py")
+
+
+def test_named_assignment_demotes_in_prose_but_a_token_does_not(tmp_path):
+    """The two halves of the rule have different confidence, so they demote
+    differently. The assignment form is a guess about intent and a README is
+    mostly examples; a vendor-format token is a match on a format and a README
+    is a perfectly ordinary place to leak one."""
+    write(tmp_path, "README.md",
+          'Set `password = "Tr0ub4dor&3xy"` in your config.\n')
+    assert severities(str(tmp_path), "--paths", "README.md")[
+        "committed-secret"] == ["P2"]
+
+    write(tmp_path, "SETUP.md", f'Run with `TOKEN=ghp_{"q" * 36}`\n')
+    assert severities(str(tmp_path), "--paths", "SETUP.md")[
+        "committed-secret"] == ["P1"]
+
+
+def test_stripe_test_key_is_not_flagged(tmp_path):
+    """`sk_test_` is Stripe's sandbox credential and is meant to be shared.
+    Only `sk_live_` is in the pattern."""
+    write(tmp_path, "pay.py", f'KEY = "sk_test_{"m" * 24}"\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "pay.py")
+
+
+def test_unc_path_names_an_internal_host(tmp_path):
+    # Built from pieces rather than written as a literal: adjacent backslashes
+    # in a fixture are the thing most likely to be silently re-escaped by
+    # whatever writes this file, and the rule needs exactly two to match.
+    bs = "\\"
+    unc = bs + bs + "BUILD-SRV-01" + bs + "artifacts"
+    write(tmp_path, "build.py", 'SHARE = "' + unc + '"\n')
+    assert severities(str(tmp_path), "--paths", "build.py")[
+        "internal-host"] == ["P2"]
+
+
+def test_a_single_backslash_path_is_not_a_unc_path(tmp_path):
+    """One backslash is a Windows relative path, not a host reference. The
+    rule needs both leading backslashes or it fires on ordinary path code."""
+    bs = "\\"
+    write(tmp_path, "b.py", 'P = "' + bs + 'artifacts' + bs + 'out"\n')
+    assert "internal-host" not in rules(str(tmp_path), "--paths", "b.py")
+
+
+def test_a_slack_prefix_alone_is_not_a_token(tmp_path):
+    """Found by running this rule over its own test file. `xox[baprs]-` plus a
+    loose `{10,}` matched `xoxb-123456789012-` - a prefix and an id, which is
+    not a credential. A real Slack token is three segments after the prefix,
+    and the loose form fires on any fixture that builds a fake one in pieces.
+    """
+    write(tmp_path, "s.py", 'PREFIX = "xoxb-123456789012-"\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "s.py")
+
+
+def test_a_vendor_documentation_example_is_not_flagged(tmp_path):
+    """AWS's own docs use `AKIAIOSFODNN7EXAMPLE`, and it gets copied into
+    every config sample in every repo. Matching the format is what makes this
+    rule safe to run everywhere; exempting the documented example is what
+    stops it firing on the copy of the documentation."""
+    write(tmp_path, "sample.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLE"\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "sample.py")
+
+
+@pytest.mark.parametrize("word", ["none", "nil", "test", "secret", "dummy"])
+def test_a_real_token_containing_a_filler_word_is_still_flagged(tmp_path, word):
+    """The exemption for tokens must not be the placeholder word list.
+
+    A GitHub token is 36 random characters, so a chance `nil` or `test`
+    substring turns up in a few percent of genuine ones. Running the filler
+    list over a token therefore drops live credentials silently, at a rate
+    nobody would ever notice - a false negative on the one rule where that is
+    the worst outcome available. Only the vendor's own doc markers exempt.
+    """
+    tok = "ghp_" + "a" * 16 + word + "b" * (20 - len(word))
+    write(tmp_path, "c.py", f'TOKEN = "{tok}"\n')
+    assert "committed-secret" in rules(str(tmp_path), "--paths", "c.py"), \
+        f"a real token containing {word!r} was silently exempted"
+
+
+def test_unc_path_in_an_escaped_source_literal_is_detected(tmp_path):
+    """The form the rule missed at first. A config file holds the bare path,
+    but the Python, C#, Java or JS literal for the same one doubles every
+    backslash - and source is the commoner place to find one. A pattern pinned
+    to exactly two-then-one matched the config and missed all of those."""
+    bs = "\\"
+    unc = bs * 4 + "BUILD-SRV-01" + bs * 2 + "artifacts"
+    write(tmp_path, "b.py", 'SHARE = "' + unc + '"\n')
+    assert "internal-host" in rules(str(tmp_path), "--paths", "b.py")
+
+
+@pytest.mark.parametrize("drive, is_dev_home", [
+    ("C:", True),
+    ("c:", True),
+    # `local-path` is pinned to the standard Windows profile root, so a
+    # `D:\Users\...` path is not a developer-home leak and nothing reports it.
+    # Included here precisely because it isolates the claim being made: the
+    # drive path must be absent from `internal-host` on its own merits, not
+    # because some other rule happened to pick it up.
+    ("D:", False),
+])
+def test_an_escaped_windows_drive_path_is_not_a_unc_path(
+        tmp_path, drive, is_dev_home):
+    """Caught by running the widened rule over this repo. Allowing two
+    backslashes as a *separator* makes an escaped drive path structurally
+    identical to a UNC path - and escaped drive paths are in every Windows
+    codebase. Widening the separators without this guard traded one miss for
+    a much commoner false positive."""
+    bs = "\\"
+    p = drive + bs * 2 + "Users" + bs * 2 + "wyc" + bs * 2 + "project"
+    write(tmp_path, "w.py", 'ROOT = "' + p + '"\n')
+    found = rules(str(tmp_path), "--paths", "w.py")
+    assert "internal-host" not in found, \
+        "an escaped Windows drive path is not a host reference"
+    assert ("local-path" in found) is is_dev_home
+
+
+def test_a_secret_is_never_proposed_for_deletion_by_severity_alone(tmp_path):
+    """Recorded as behaviour, not aspiration: the finding carries the reason
+    the fix is out of this skill's hands. Deleting the line leaves the
+    credential in git history, so a message that reads like an ordinary
+    delete-this finding would invite exactly the wrong fix."""
+    write(tmp_path, "c.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLQ"\n')
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "c.py").stdout)
+    msg = [f["message"] for f in data["findings"]
+           if f["rule"] == "committed-secret"][0]
+    assert "rotate" in msg and "history" in msg, msg

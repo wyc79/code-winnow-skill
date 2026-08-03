@@ -712,6 +712,112 @@ RE_TRACE_WORD = re.compile(
 RE_COMMENTED_CODE = re.compile(r"^\s*(//|#)\s*[\w\]\)]+.*[;{}]\s*$")
 RE_TRIPLE_QUOTE = re.compile(r'"""|\'\'\'')
 
+# ---------------------------------------------------------------------------
+# secrets
+#
+# Structured formats only. There is deliberately no entropy heuristic here:
+# hashes, UUIDs, base64 blobs, minified bundles and test fixtures all look
+# random, so a "high entropy string" rule fires constantly on files that hold
+# no secret at all. This skill's whole posture is that a noisy rule is worse
+# than a missing one, because it trains the reader to skim - and the thing
+# they skim past is the P1. Every pattern below is self-identifying: a vendor
+# prefix, or a PEM header. The rule matches a *format*, never a guess.
+# ---------------------------------------------------------------------------
+RE_SECRET_TOKEN = re.compile(
+    r"(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}"          # AWS access key id
+    r"|gh[pousr]_[A-Za-z0-9]{36,}"                  # GitHub token
+    r"|github_pat_[A-Za-z0-9_]{22,}"                # GitHub fine-grained PAT
+    r"|glpat-[A-Za-z0-9_-]{20,}"                    # GitLab PAT
+    # Slack tokens are three segments after the prefix. `xox[baprs]-` plus a
+    # loose `{10,}` matched `xoxb-123456789012-` on its own - a prefix with an
+    # id after it, which is not a credential and is exactly what a fixture
+    # building a fake token out of pieces looks like.
+    r"|xox[baprs]-[0-9]{10,}-[0-9]{10,}-[A-Za-z0-9]{20,}"  # Slack
+    r"|xapp-[0-9]-[A-Z0-9]{8,}-[0-9]{10,}-[a-f0-9]{20,}"   # Slack app-level
+    r"|[sr]k_live_[A-Za-z0-9]{20,}"                 # Stripe live key
+    r"|sk-(?:ant|proj)-[A-Za-z0-9_-]{20,}"          # Anthropic / OpenAI
+    r"|AIza[0-9A-Za-z_-]{35}"                       # Google API key
+    r"|npm_[A-Za-z0-9]{36}"                         # npm
+    r"|dop_v1_[a-f0-9]{64}"                         # DigitalOcean
+    r"|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}"    # SendGrid
+    r"|hooks\.slack\.com/services/T[A-Za-z0-9_/-]{20,}")   # Slack webhook
+# `[A-Z]+ ` covers RSA, EC, DSA, OPENSSH, PGP and the bare PKCS#8 form.
+RE_PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")
+# A UNC path names an internal host and share. Narrow on purpose: hostnames in
+# general are unmatchable without false-positiving every domain in every URL,
+# and the doc claim this implements is worth less than the noise that would buy.
+#
+# The separator counts are ranges because source code escapes them: a config
+# file holds the bare form, and the Python, C#, Java or JS literal for the same
+# path doubles every backslash. A pattern pinned to exactly two-then-one
+# matches the config and misses every one written in actual source, which is
+# the commoner place to find one. Two is still the floor, so a lone
+# `\artifacts\out` relative path does not match.
+#
+# The lookbehind is what stops that widening from costing more than it buys.
+# Allowing two backslashes as a *separator* makes an escaped Windows drive
+# path - `C:\\Users\\me`, which is in every Windows codebase and which
+# `local-path` already reports - structurally identical to a UNC path. A UNC
+# path begins at the double backslash; a drive path has a colon or an
+# identifier character in front of it. Rejecting those two is the difference.
+RE_UNC_PATH = re.compile(
+    r"(?<![A-Za-z0-9:_])\\{2,4}[A-Za-z][A-Za-z0-9._-]{2,}\\{1,2}[A-Za-z0-9._$-]+")
+RE_SECRET_ASSIGN = re.compile(
+    r"""(?ix)
+    \b(pass(?:wo?rd)?|passwd|secret|api[_-]?key|apikey|auth[_-]?token
+      |access[_-]?token|client[_-]?secret|private[_-]?key|credentials?
+      |connection[_-]?string|bearer)
+    \s* (?: := | => | [:=] ) \s*
+    (['"])(?P<val>[^'"]{8,})\2
+    """)
+# Template syntax means the value is filled in elsewhere - it is the *absence*
+# of a secret, and the shape most likely to be mistaken for one.
+RE_SECRET_TEMPLATE = re.compile(
+    r"\$\{|\{\{|<[A-Za-z_][A-Za-z0-9_]*>|%\(|%s|\$\(|\$[A-Z_]{2,}|@[A-Z_]{2,}@")
+PLACEHOLDER_WORDS = (
+    "example", "sample", "placeholder", "changeme", "change-me", "change_me",
+    "redacted", "dummy", "fake", "todo", "foobar", "your", "replaceme",
+    "replace-me", "replace_me", "insert", "none", "null", "nil", "undefined",
+    "notreal", "hunter2", "abc123", "password", "secret", "xxxx", "test",
+)
+
+
+# Vendors publish well-formed keys in their own documentation - AWS's is
+# `AKIAIOSFODNN7EXAMPLE` - and those get copied into config samples everywhere.
+DOC_EXAMPLE_MARKERS = ("example", "sample")
+
+
+def looks_like_placeholder(val):
+    """A credential-shaped literal that is obviously not a credential.
+
+    For the *assignment* branch only, where the whole value is under suspicion
+    and a filler word anywhere in it means the author wrote a stand-in.
+
+    Three tells, and the first is the one that matters most in practice:
+    `xxxxxxxx`, `--------` and `00000000` are what a redacted config looks
+    like, and flagging them teaches the reader that this rule cries wolf.
+    """
+    if len(set(val)) <= 2:
+        return True
+    if RE_SECRET_TEMPLATE.search(val):
+        return True
+    low = val.lower()
+    return any(w in low for w in PLACEHOLDER_WORDS)
+
+
+def looks_like_documented_example(token):
+    """A vendor's own documentation key. **Not** the full placeholder list.
+
+    A vendor token is a fixed-length random string, so a chance substring like
+    `nil`, `test` or `none` says nothing about whether it is real - and at 36
+    random characters those turn up in a few percent of genuine tokens. Running
+    the placeholder list over a token therefore drops live credentials, at a
+    rate nobody would notice, on the one rule where a false negative is the
+    worst outcome available. Match only the markers a vendor actually uses.
+    """
+    low = token.lower()
+    return any(w in low for w in DOC_EXAMPLE_MARKERS)
+
 
 def has_ticket(text):
     """A link, an issue number, or a real ticket id - but not `UTF-8`,
@@ -803,6 +909,43 @@ def check_universal(path, lines, findings):
                 "local-path",
                 "absolute /home path - a developer home or a container path, "
                 "confirm which", anchor)
+
+        # Secrets do not demote in a test or prose file. Every other rule here
+        # does, because a home path in a fixture is data and an em dash in a
+        # README is correct - but a well-formed vendor token is a live
+        # credential wherever it sits, and a leaked key in a test fixture is
+        # the *commonest* place it leaks, not a special case. The formats are
+        # self-identifying, so the false-positive cost of not demoting is
+        # close to zero.
+        m_token = RE_SECRET_TOKEN.search(text)
+        m_assign = RE_SECRET_ASSIGN.search(text)
+        if RE_PRIVATE_KEY.search(text):
+            add(findings, path, idx, "P1", "committed-secret",
+                "private key block in source - rotate it; deleting the line "
+                "does not remove it from history", anchor)
+        elif m_token and not looks_like_documented_example(m_token.group(0)):
+            # A *narrow* exemption, not the placeholder list - see the
+            # docstring on looks_like_documented_example. Matching the format
+            # is what makes this rule safe to run everywhere; exempting only
+            # the vendor's published example is what keeps it from firing on
+            # a copy of the docs without dropping real keys along with it.
+            add(findings, path, idx, "P1", "committed-secret",
+                "credential in a recognised vendor format - rotate it; "
+                "deleting the line does not remove it from history", anchor)
+        elif m_assign and not looks_like_placeholder(m_assign.group("val")):
+            # The named-variable form is a guess about intent, not a format
+            # match, so this one *does* demote where fixtures and examples
+            # live. `password = "hunter2"` in a README is nearly always
+            # illustration; the same line in a service is nearly always not.
+            add(findings, path, idx, "P2" if illustrative else "P1",
+                "committed-secret",
+                f"'{m_assign.group(1)}' assigned a literal value - confirm it "
+                "is not a real credential", anchor)
+
+        if RE_UNC_PATH.search(text) and not is_prose:
+            add(findings, path, idx, "P3" if is_test else "P2",
+                "internal-host",
+                "UNC path names an internal host and share", anchor)
 
         if RE_TODO.search(text) and not has_ticket(text) and not is_test:
             add(findings, path, idx, "P3", "orphan-todo",

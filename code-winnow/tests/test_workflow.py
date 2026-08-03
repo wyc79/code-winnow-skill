@@ -501,6 +501,66 @@ def test_step5a_refuses_a_plan_that_is_not_approved(repo, status, why):
         "refused, but still made a backup - the refusal came too late"
 
 
+# --------------------------------------------------------------------------
+# Agent D's notes document must never be executable as a fix plan
+# --------------------------------------------------------------------------
+
+def _notes_template():
+    """The performance-notes document template, from Step 4."""
+    text = open(SKILL_MD, encoding="utf-8").read()
+    hits = [m.group(1) for m in re.finditer(r"```markdown\n(.*?)```", text, re.S)
+            if "# Performance notes" in m.group(1)]
+    assert len(hits) == 1, (
+        f"expected exactly one performance-notes template in SKILL.md, "
+        f"found {len(hits)} - this test cannot tell which one is current")
+    return hits[0]
+
+
+def test_the_notes_document_is_not_fix_plan_shaped():
+    """Agent D's notes are never applied, and the only thing enforcing that at
+    the mechanical level is that the document does not parse as a plan.
+
+    Step 5a finds fix items by `- [ ]` and the paths it backs up and edits by
+    `file:`. A notes document carrying either token is one an executor could act
+    on. Every other failure in this skill costs a re-run; this one edits files.
+    """
+    tpl = _notes_template()
+    assert not re.search(r"(?m)^\s*-\s*\[.\]\s", tpl), (
+        "the notes template carries a `- [ ]` item marker - Step 5a's ITEM "
+        "regex would parse it as an approved fix")
+    assert not re.search(r"(?m)^\s*file:\s*\S", tpl), (
+        "the notes template carries a `file:` line - Step 5a would back up "
+        "and edit that path")
+
+
+@requires_bash
+def test_step5a_refuses_the_notes_document_on_its_status_line(repo):
+    """Belt and braces, and it pins a different failure from the test above.
+
+    That one pins the two tokens; this one pins the `Status:` line, by handing
+    the real Step 5a script the notes template under a plan's filename.
+
+    It asserts WHICH gate refused, not merely that something did. Asserting only
+    `REFUSING` was vacuous: with Status mutated to APPROVED the script sails past
+    the approval gate and refuses two checks later on "no fix items found", so
+    the test stayed green while the thing it claimed to pin was gone. The
+    mutation harness caught exactly that. Layered gates are the right design;
+    a test that cannot say which one fired is not.
+    """
+    stem = _bootstrap(repo)
+    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
+        _notes_template(), encoding="utf-8")
+    p = _run_step5a(repo)
+    out = p.stdout + p.stderr
+    assert "REFUSING" in out, \
+        f"Step 5a accepted Agent D's notes document as a fix plan:\n{out}"
+    assert "Status reads" in out, (
+        "refused, but not on the Status line - the notes document's "
+        f"`Status: NOT APPLIED` is no longer what stops it:\n{out}")
+    assert not (repo / ".code-winnow" / f"{stem}.pre-fix").exists(), \
+        "refused, but still made a backup - the refusal came too late"
+
+
 @requires_bash
 def test_baseline_json_exists_before_step_3_needs_it(repo):
     run_block(_find_block("EXCLUSION FAILED")[2], str(repo))

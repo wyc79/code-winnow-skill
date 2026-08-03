@@ -4,7 +4,9 @@ Agent skill that strips generated-code chaff from an uncommitted change or a bra
 
 Generated code is rarely wrong; it is bloated, over-defensive, and stylistically foreign to the repo it landed in. Linters catch rule violations. This skill covers the judgment gap: restated comments, unused bindings, mock-only tests, speculative abstraction, documentation the change quietly made false, and the rest of the usual AI residue.
 
-**This is a diff review, not a repo audit.** It operates only on lines the current change added or modified. It does not hunt bugs or run a security review.
+It also asks two questions about the change that a green test suite cannot answer: **how does this break silently**, and **what did it make slow**. Both are gated hard — the fragility pass reports only what the diff did and only where no test could catch it, and the performance pass reports nothing it cannot attach a call frequency to.
+
+**This is a diff review, not a repo audit.** It operates only on lines the current change added or modified. It does not hunt bugs and it is **not a security review** — use a dedicated tool for that. Two security-shaped things it does report: a protection *this change removed*, quoted from the diff's own `-` side, and a credential committed in a recognised vendor format. Neither is ever auto-fixed — you cannot un-leak a key by deleting the line.
 
 ## When to use
 
@@ -46,9 +48,9 @@ Then invoke it by name (`code-winnow`, `winnow`, `de-slop`) or by asking the age
 2. **Check capabilities** — detect which companion skills exist here, look for equivalents already installed under other names, and say once what is missing before the review starts rather than degrading silently.
 3. **Scan** — `scripts/scan.py` resolves scope (staged ∪ unstaged ∪ untracked, or branch vs base) and emits regex/AST **candidates**, not verdicts.
 4. **Scope, if a feature was named** — a separate agent draws the boundary from your own words before any review starts, and you confirm it. Deciding what is *eligible* to be judged matters more than any verdict, and the agent that wrote the code should not be the one drawing that line.
-5. **Judge** — three parallel agents with no shared context and no design rationale: chaff, comments + docstrings, and documentation + file headers. Docstrings get their own pass, since generated diffs carry one per function whether or not there is anything to say. The third agent runs only when the diff touches docs, adds files, or changes a public surface.
-6. **Reconcile** — a conflict check merges their outputs. A comment claiming intent overrides a finding only when it names a *checkable* why; a bare "reserved for future use" merges with the code into one decision instead of excusing it.
-7. **Report** — human-readable + JSON under `.code-winnow/`, reconciled against prior runs and declined findings.
+5. **Judge** — five parallel agents with no shared context and no design rationale: chaff, comments + docstrings, documentation + file headers, performance, and silent failure. Docstrings get their own pass, since generated diffs carry one per function whether or not there is anything to say. Docs and performance are conditional — they run only when the diff gives them something to look at.
+6. **Reconcile** — a conflict check merges their outputs across ten classes. A comment claiming intent overrides a finding only when it names a *checkable* why; a bare "reserved for future use" merges with the code into one decision instead of excusing it. And the fragility pass can **veto a deletion**: when it names the mechanism that makes a line load-bearing, the proposed removal never reaches the fix plan.
+7. **Report** — human-readable + JSON under `.code-winnow/`, reconciled against prior runs and declined findings. Performance notes go to a separate document and are never applied.
 8. **Apply only on approval** — writes a fix plan, then applies it in a cleared context, a fix subagent, or in place. Copies every file it will edit to a restore point first (untracked files have no git undo) and refuses to edit if that copy is incomplete. Unattended runs stop at the plan, mark it `UNAPPROVED`, and never edit.
 9. **Verify** — re-run the **whole** test suite and compare it against the baseline captured before the first edit, not against green: a failure absent from the baseline is yours, a pre-existing one is not yours to chase, and a green run with *fewer tests* is a regression. Then re-scan with reconciliation, run a deletion-safety pass over the removed lines only, and report approved / applied / skipped.
 
@@ -68,7 +70,8 @@ Test-chaff detection is broader, because the shapes are: pytest/unittest, NUnit/
 code-winnow/
   SKILL.md                 # Agent instructions
   scripts/scan.py          # Deterministic candidate scanner
-  references/              # Judgment standards (patterns, languages, tests, portability)
+  references/              # Judgment standards (patterns, languages, tests,
+                           #   performance, fragility, portability)
   tests/                   # Scanner tests, SKILL.md workflow harness, mutation check
 ```
 
@@ -92,6 +95,7 @@ Run `python3 scripts/scan.py --help` for the full flag set. The scanner itself *
 - Public / serialized API surface (`UPROPERTY`, `[SerializeField]`, exports)
 - Test scaffolding — unless the "test" asserts nothing, asserts a tautology, or only checks mocks. Those are false coverage and get fixed, not deleted (P1 or P2 depending on language and shape)
 - File headers matching the repo's convention. Unifying divergent headers needs an explicit yes, and never touches files outside the diff
+- Any line the fragility pass names as load-bearing — a GC root, a directive comment, a type carrier, a registration anchor, a side-effect import. That veto beats a proposed deletion and the removal never reaches the fix plan
 - Anything outside the diff, or outside the named feature. The sole exception is a doc line the change made false, reported with both lines cited
 
 ## License

@@ -49,7 +49,7 @@ One carve-out, and it is narrow. `code-winnow: apply <plan>.fixplan.md` **is** S
 
 | Capability | Detect by | Degraded path | Installable? |
 |---|---|---|---|
-| Subagents / parallel dispatch | A task-spawning tool exists | Run the passes serially yourself. Say once that the judgment pass was self-review. Also removes rung 2 of the Step 4b ladder — see below. | No — runtime feature |
+| Subagents / parallel dispatch | A task-spawning tool exists | Run the passes serially yourself, in order: A, B, C, D, E. Say once that the judgment pass was self-review. Also removes rung 2 of the Step 4b ladder — see below. | No — runtime feature |
 | Context clearing | The runtime offers `/clear` or an equivalent the *user* can invoke | Rung 1 of the Step 4b ladder is unavailable. Fall to rung 2, then rung 3. | No — runtime feature |
 | `superpowers:*` | Listed in available skills | Their operative content is summarized inline in SKILL.md Steps 3 and 6. | Yes |
 | `andrej-karpathy-skills:karpathy-guidelines` | Listed in available skills | Inline digest in SKILL.md Step 5. | Yes |
@@ -135,6 +135,8 @@ SKILL.md avoids Claude-Code-only syntax. Slash commands do not appear on the req
 
 With zero companion skills, the run is still complete: exclude the workspace → resolve scope → scan → judgment passes → conflict check → report → approval → fix plan → back up → fix → verify. The companions improve the judgment and the review. They are not load-bearing, and the review is worth running without them.
 
-The conflict check needs nothing at all — it reconciles outputs you already have. On a serial run it matters more, not less: one agent doing all three passes is likelier to produce findings that quietly contradict each other, because nothing forced the contradiction into the open.
+The conflict check needs nothing at all — it reconciles outputs you already have. On a serial run it matters more, not less: one agent doing every pass is likelier to produce findings that quietly contradict each other, because nothing forced the contradiction into the open.
+
+**One class degrades further than the others on a serial run, and SKILL.md Step 3.5 says so: Agent E's veto over A's deletions.** Its value comes from A's proposal and E's objection being formed by two readers who cannot see each other's reasoning. Run serially, both come from you, minutes apart, and the objection arrives after you have already argued yourself into the deletion. The degraded path is to do E's reading of A's proposed removals as a **separate pass against `fragility.md`**, before writing either into the report — deliberately, because a parallel run gets it structurally and a serial one does not get it at all.
 
 The backup is load-bearing, though. Without a shell or a writable filesystem you cannot make one, and then the run ends at the report — see SKILL.md Step 5a. Report the findings, say the fixes were not applied because no restore point could be written, and let the user apply them by hand.
