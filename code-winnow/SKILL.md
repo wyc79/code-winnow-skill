@@ -145,25 +145,72 @@ State the source and file count before continuing — `files`, `scanned_files` a
 
 They can ask for a branch review and still mean one slice of it: "winnow the dash cooldown work", "just the retry logic", "only the parts touching the save system". Take that literally.
 
-**Resolve it to a file and hunk set, then state it back before dispatching anything:**
+**Do not try to compute the scope. Pass the user's words to the agents and let them judge it.**
+
+The tempting move is to resolve the phrase to a hunk or line set up front and filter mechanically. Do not. It fails at both ends:
+
+**Hunk ordinals mean different things to different readers.** A hunk is an artifact of how much context the diff was rendered with. The scanner reads `git diff --unified=0`; the Step 3 agents read `git diff HEAD`, which is `-U3`. Two changes three lines apart are **one** hunk to the agents and **two** to the scanner, so "hunk 2" names different regions to the two readers of the same diff. At `-U3` an unrelated typo fix two lines from a feature change also merges into the same hunk, and there is no way to say "half of hunk 1".
+
+**And the user was not thinking in code structure when they asked.** "The retry logic", "the parts touching the save system", "the dash cooldown work" — none of these are symbol names, and matching them by text against identifiers gets both false hits and misses. Deciding what belongs to a feature is a judgment about intent, and judgment is what the agents are for. A brittle rule that silently returns the wrong set is worse than a judgment call that is stated out loud.
+
+So carry the request, do not compile it:
+
+**1. Restate your understanding before dispatching**, in the user's own terms, and let them correct it:
 
 ```
-Feature "dash cooldown" resolves to:
-  Dash.cs           hunks 1-3
-  DashConfig.cs     whole file (new)
-  PlayerInput.cs    lines 88-104
-3 of the 12 files in the diff. Reviewing only these — confirm or correct.
+You asked for the dash cooldown work. Reading the diff, that looks like:
+  Dash.cs, DashConfig.cs, PlayerInput.cs        — clearly in
+  SaveSystem.cs — dash state is serialised here — not sure, tell me
+  the other 8 files                             — unrelated, will report only
+Confirm or correct before I start.
 ```
 
-Ask, because you are guessing from a phrase. A derivation that is silently one file wide reviews code the user did not ask about; one that is silently one file narrow misses the thing they did. Neither is visible in the output. Unattended, and unable to resolve it confidently: **widen to the whole diff and say so** — see the unattended table.
+**Do not produce that reading yourself. Dispatch Agent S first.**
+
+**Agent S — scope.** Dispatched only when a feature was named, and **before** A, B and C. It gets the input diff and the user's phrase verbatim. Nothing else: no scanner JSON, no conversation history, no design rationale.
+
+> The user asked for a review of one thing only, in their words: *"winnow the dash cooldown work"*.
+> Here is the full diff. Decide, for each file and for any region within a file that plainly differs from the rest of it, whether it is part of what they asked for.
+> Return `in | out | unsure`, each with one line of reason. Use `unsure` freely — it is a question the user will answer, not a failure. Do not review the code, do not report chaff, do not propose changes. You are drawing a boundary, nothing else.
+
+Two reasons this is its own agent rather than your reading of the diff.
+
+**Scope is a bigger power than judgment, and it is the one you should least be trusted with.** Step 3 already says not to judge your own output. Deciding what is *eligible* to be judged decides more than any verdict does — and in this skill's headline case you generated the code an hour ago. An agent that knows the helper it bodged into `Utils.cs` is not *really* dash cooldown work leaves it out, states back something entirely reasonable, gets a yes, and that file is never reviewed by anyone. Nothing in the output shows it happened.
+
+**One boundary, settled once.** The alternative — every agent judging scope as it goes — desynchronises them. Step 3.5 pairs A's finding with B's verdict on the comment above it; if A calls that line in-scope and B calls it out, the pair never meets, A's finding goes live alone, and the merged finding those two rules exist to produce silently does not happen.
+
+**Then confirm it with the user before dispatching anyone else:**
+
+```
+You asked for the dash cooldown work. Scope pass says:
+  Dash.cs, DashConfig.cs, PlayerInput.cs        in
+  SaveSystem.cs — dash state is serialised here unsure
+  the other 8 files                             out — will report only
+Confirm or correct before I start.
+```
+
+Every `unsure` is a question, asked now. `unsure` must never be silently resolved into either pile — that bucket is precisely where a guess would have been wrong without anyone finding out, and asking costs one line.
+
+**A, B and C then receive the confirmed scope as a rule, not a hint** — the file and region list, plus the user's phrase for context. They do not re-derive it. One thing they may do:
+
+> Scope was settled before you started and the user confirmed it. Work only inside it.
+> If you find something that plainly belongs to this feature and is outside the list, or plainly does not belong and is inside it, **say so as an appeal** — name the location and the reason, and keep reviewing under the list as given. Do not act on your own scope opinion; a boundary that moves per agent stops being a boundary.
+
+Appeals go to the user with the report, never applied silently. That keeps the one thing a reviewing agent genuinely knows better — it has read the code — without letting three agents each redraw the line.
+
+Ask, because you are guessing from a phrase. A reading that is silently one file wide reviews code the user did not ask about; one that is silently one file narrow misses the thing they did. Neither is visible in the output. Unattended: Agent S still runs, but nothing confirms it, so take its `in` set only when it returned no `unsure` at all — otherwise **widen to the whole diff and say so**, per the unattended table. An unreviewed boundary drawn by one agent and approved by nobody is the failure this whole section exists to prevent.
+
+When no feature is named, none of this happens: no Agent S, no tags, no appeals, and the diff is the scope.
+
+The fix plan records the feature as the user's phrase plus the files that survived, so a cold executor inherits the constraint in the form it was actually decided.
 
 Three things the feature set governs, and three it does not:
 
 | Governs | Does not govern |
 |---|---|
-| Which hunks the Step 3 agents review | What the scanner scans — **always the whole diff** |
+| What A, B and C review at all | What the scanner scans — **always the whole diff** |
 | Which findings are live in the report | What `<stem>.json` contains — always the full scan |
-| What Step 5 may edit | What you may read for verification |
+| Which findings reach the fix plan | What you may read for verification |
 
 **That first "does not" is load-bearing.** If a feature-scoped run wrote a narrowed `<stem>.json`, the next run's `--since` would compare a full baseline against a narrow one and report every out-of-feature finding as `resolved` — a page of "no longer true" claims about findings that are all still true. That is the same defect as running `--min-severity` before reconciliation, and it is the reason the filter lives at the report layer and touches nothing the scanner writes.
 
@@ -196,7 +243,9 @@ Everything else in `warnings` is real.
 
 **Check the size before dispatching.** If the diff runs past a few hundred changed lines across many files, say so and offer to split it — by directory, by commit, or by language — rather than handing an agent more than it can hold. A judgment pass over a diff that overflowed its context returns confident nonsense. Unattended, split it yourself by top-level directory rather than asking.
 
-**Split the dispatch, never the scope.** `--paths` looks like the tool for this and is not: it scans whole files, marks every line as added, sets `preexisting: false` on everything, and stamps a `_files_` stem that no longer reconciles against the prior run. Splitting that way converts a diff review into the repo audit this skill exists to refuse. Instead run the same scope once, then hand each agent a subset of the hunks and give each subset its own section in one report.
+**Split the dispatch, never the scope.** `--paths` looks like the tool for this and is not: it scans whole files, marks every line as added, sets `preexisting: false` on everything, and stamps a `_files_` stem that no longer reconciles against the prior run. Splitting that way converts a diff review into the repo audit this skill exists to refuse. Instead run the same scope once, then hand each agent a subset of the **files** and give each subset its own section in one report.
+
+Split on file boundaries, not inside a file. A file handed to two agents gets two partial views of code that has to be judged whole — a helper duplicated at the top and used at the bottom is invisible to both — and neither agent can tell that the other half exists.
 
 ## Step 2 — Deterministic scan
 
@@ -426,7 +475,7 @@ Dispatch the agents **in parallel** (see `superpowers:dispatching-parallel-agent
 
 Each agent has to check for itself. The orchestrator's `SNAPSHOT` comparison catches a change before dispatch and after return, but not one landing *during* — and the parallel window is exactly when the user is most likely to still be working. An agent that quietly renumbers around a moved line produces findings whose anchors all fail at Step 5, reported there as "stale" with no trace of the cause.
 
-**Division of labour, so their outputs merge cleanly — three agents, three different questions:**
+**Division of labour, so their outputs merge cleanly — three agents, three different questions.** A fourth, **Agent S**, ran already: it drew the feature boundary in Step 1 and is finished before any of these start. These three work inside the boundary the user confirmed and do not redraw it; they may appeal it, and an appeal goes to the user, not into their findings.
 
 | | Owns | The question it answers |
 |---|---|---|
@@ -491,6 +540,8 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 
 Serial fallback if the runtime has no subagents: run A, then B, then C yourself, and say once in the report that the judgment pass was self-review.
 
+**Agent S has no serial fallback worth the name, and the report must say so.** Its whole value is that a reader with no design rationale drew the boundary; doing it yourself restores exactly the conflict it exists to remove. Draw it, confirm it with the user as usual, and record in the report that the scope was self-drawn — that line is what tells a later reader which decision to distrust if something turns out to have been left out.
+
 ## Step 3.5 — Conflict check
 
 The split that keeps the agents' outputs mergeable also blinds A to the one thing that most often decides its verdicts: what the author said. A field with no reader is dead weight — unless the line above it says the serializer reads it. Without this step the report contradicts itself, proposing a deletion on one page and quoting the comment defending it on another.
@@ -519,7 +570,7 @@ A comment is adjacent to a finding when it is on the same line as the finding's 
 
 X5, X6 and X7 do not arise when C was not dispatched. When it was not, B's one-line notes about comments or docstrings it suspected were false still reach the report — as P3 "unverified doc claim", never dropped. A suspicion nobody checked is worth less than a verified finding and more than silence.
 
-Out-of-feature findings (Step 1) are unjudged and never enter this step.
+Findings outside the confirmed scope never enter this step — arbitrating something nobody is going to act on spends judgment on a byproduct. Scope appeals are not conflicts either: they go to the user with the report, not through these rules.
 
 ### X1 — grading the claim
 
@@ -619,7 +670,9 @@ Generated: <YYYY-MM-DD HH:MM>
 Scope: <diff source> — <current branch> vs <base / worktree / staged>
 Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
 Feature: <name> — <N> of <files> files          (omit when none was named)
-Passes: A chaff, B comments, C docs+headers      (say which ran; if C was skipped, why)
+Passes: S scope, A chaff, B comments, C docs+headers  (say which ran; if C was skipped, why;
+        if S was self-drawn rather than dispatched, say that too)
+Scope appeals: <n> — listed below, unresolved   (omit when none)
 Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded
 Previous run: <prior stem, or "none">
 
@@ -638,7 +691,7 @@ Previous run: <prior stem, or "none">
 ### Deliberately left alone
 - <looked like chaff, isn't, and why>
 
-### In the diff, outside "<feature>"  (unjudged)
+### In the diff, outside "<feature>"  (not swept)
 - <one sentence: what it is> <one sentence: what it does>
 
 ### Pre-existing, in files this change touches
@@ -672,10 +725,10 @@ If a P3-only list runs past a screen, cut it. Twenty cosmetic nits train the use
 
 Only when Step 1 resolved a feature. Same discipline as pre-existing flaws, for the same reason: it is a courtesy, and a courtesy that takes over the report stops being one.
 
-Two sources, both free — the scanner already ran over the whole diff, and an agent may have noticed something while reading around the feature. **Neither is a sweep**; nobody goes looking. Report them **unjudged**: top three by severity, a count for the rest, two sentences each, no proposed patches, no severity debate.
+This is what the scanner found outside the confirmed scope, plus anything A, B or C happened to notice at its edges. **Nobody swept for it** — no agent reviewed those files, and the scanner had already run over the whole diff anyway. Report it as a courtesy: top three by severity, a count for the rest, two sentences each, no proposed patches, no severity debate.
 
 ```
-### In the diff, outside "dash cooldown"  (unjudged)
+### In the diff, outside "dash cooldown"  (not swept)
 - `Inventory.cs:22` — Bare `except` around the reload path. Converts a failed reload into a silent empty inventory.
 - `UIPanel.cs:9` — Field `pendingRefresh` declared and never read.
 - ...and 6 more. Say the word for a full pass over these.
@@ -683,13 +736,16 @@ Two sources, both free — the scanner already ran over the whole diff, and an a
 
 These never enter the fix plan and are not eligible for Step 5. Fixing one takes a second, explicit approval — and the honest way to get it is to offer a proper pass, not to slip them into a cleanup the user scoped to something else.
 
-**Say what the out-of-feature files did not get.** Only the scanner ran there, and by Agent A's own brief the scanner catches the cheap half — speculative abstraction, mock theatre, duplicated helpers are the expensive half and are invisible to a regex. So a mock-only test sitting in an out-of-feature file is absent from the report entirely, and the header's `3 of 12 files` reads like coverage of twelve. One line fixes it:
+**Agent S's `unsure` files are not in this section**, and neither are scope appeals. Both were questions put to the user; filing either here reads as "reviewed and set aside", which is the one thing they are not. If the user answered an `unsure` with "out", it lands here like any other out-of-scope file — but only after they said so.
+
+**Say what the out-of-feature files did not get**, because a partial pass reads as a complete one. The agents judged what they happened to see there; nothing systematic ran. A mock-only test in a file nobody opened is absent from the report entirely, and the header's `3 of 12 files` otherwise reads like coverage of twelve:
 
 ```
-9 files in the diff got the scanner pass only, not the judgment pass.
+9 files in the diff were not reviewed — scanner only, plus whatever the agents
+noticed in passing. Findings there are incidental, not a coverage claim.
 ```
 
-Two smaller consequences of "unjudged", both worth knowing rather than fixing: severity ordering is approximate, because agent-noticed items have no assigned severity; and these findings are never presented as decisions, so they can never be declined, so they persist in every later run. If a particular one keeps returning and the user does not want it, the answer is to judge it properly in a scoped run, not to decline something that was never offered.
+One consequence worth knowing rather than fixing: these are never presented as decisions, so they can never be declined, so they persist in every later run. If one keeps returning and the user does not want it, the answer is to judge it properly in a scoped run — not to decline something that was never offered.
 
 ### The header convention gate
 
@@ -751,7 +807,8 @@ Once the user has approved a subset, write `.code-winnow/$STEM.fixplan.md`. It h
 Status:   APPROVED by the user on 2026-08-02
 Skill:    /home/me/.claude/skills/code-winnow
 Scope:    12 files in diff, 3 in feature "dash cooldown"
-Feature:  dash cooldown — src/Dash.cs, src/DashConfig.cs, src/PlayerInput.cs
+Feature:  "winnow the dash cooldown work" — the user's own words, confirmed to mean
+          src/Dash.cs, src/DashConfig.cs, src/PlayerInput.cs
 Baseline: .code-winnow/currentfeature-dash_targetmain_20260802-2028.json
 Backup:   .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/  (NOT YET MADE)
 Undo:     cp -a .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/. .
@@ -1189,7 +1246,7 @@ These look like chaff and are load-bearing:
   This is not a blanket pass for test files, and treating it as one is how false coverage survives review. A test that asserts nothing, asserts a tautology, or asserts only that a mock was called is not scaffolding — it is a test that cannot fail, and P1 is the right severity for it. The fix is almost always to tighten the assertion, never to delete the test: removing a test is a coverage regression wearing a cleanup costume. See `$WINNOW/references/tests.md`.
 - **File headers matching the repo's convention** — a copyright or license block identical across two hundred files is doing its job by being identical. Concision does not apply to boilerplate that exists to be uniform. Headers are only ever edited through the Step 4 gate, only on files the diff already touched, and never to make the repo consistent with itself.
 - **Anything outside the diff** — report it under Pre-existing, in two sentences, and move on. The one exception is a documentation line the change made false, which Agent C reports with both lines cited.
-- **Anything outside the named feature**, when the user named one. It goes in the outside-the-feature section, unjudged, and is not eligible for a fix.
+- **Anything outside the named feature**, when the user named one — the boundary Agent S drew and the user confirmed. It goes in the outside-the-feature section as a byproduct and is not eligible for a fix. An `unsure` file, or an agent's appeal to move the line, is a question for the user — never something you settle yourself.
 
 ## Worked examples
 
