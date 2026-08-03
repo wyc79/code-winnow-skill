@@ -11,7 +11,7 @@ This script breaks each fix in turn and requires the matching tests to fail.
 A mutation that leaves the suite green means the tests are not pinning it.
 
     python3 tests/check_mutations.py           # all mutations
-    python3 tests/check_mutations.pydeclined   # substring filter
+    python3 tests/check_mutations.py declined  # substring filter
 
 Slow (one pytest run per mutation), so it is not part of the default suite.
 Run it whenever you add a regression test, and before believing one.
@@ -141,12 +141,19 @@ def main():
             open(target, "w", encoding="utf-8").write(original)
 
         tail = got.stdout.strip().splitlines()[-1] if got.stdout.strip() else "(no output)"
-        if got.returncode == 0:
-            print(f"  VACUOUS  {name:28} tests still pass with the fix removed")
+        nfail = len(re.findall(r"^FAILED ", got.stdout, re.M))
+        # `nfail == 0` is the case a return-code check alone waves through:
+        # pytest exits 5 for "no tests collected", which is non-zero, so a `-k`
+        # expression that has gone stale after a rename reported "ok, 0 test(s)
+        # caught it" and the script exited 0. The staleness guard above checks
+        # the `find` string; nothing checked the `-k` until this line.
+        if got.returncode == 0 or nfail == 0:
+            why = ("tests still pass with the fix removed" if got.returncode == 0
+                   else "-k matched no tests - this row is stale, not passing")
+            print(f"  VACUOUS  {name:28} {why}")
             print(f"           -k {kexpr!r} -> {tail}")
             failures.append(name)
         else:
-            nfail = len(re.findall(r"^FAILED ", got.stdout, re.M))
             print(f"  ok       {name:28} {nfail} test(s) caught it")
 
     print()

@@ -1116,7 +1116,7 @@ def check_python_tests(path, tree, lines, findings):
 
         # span: the finding is about the whole test body, so a deletion inside
         # it counts.
-        body_end = getattr(fn, "end_lineno", None)
+        body_end = fn.end_lineno
 
         if not asserts:
             add(findings, path, fn.lineno, "P1", "test-without-assertion",
@@ -1744,7 +1744,10 @@ RE_DECL_SKIP = re.compile(
 EXPOSED = re.compile(r"\b(public|protected|internal|UPROPERTY|UFUNCTION|"
                      r"SerializeField|Serializable|export)\b")
 
-def _exposed_above(lines, idx, lookback=12):
+EXPOSED_LOOKBACK = 12
+
+
+def _exposed_above(lines, idx, lookback=EXPOSED_LOOKBACK):
     """Is there an exposing attribute in the block decorating this line?
 
     Track bracket and paren balance rather than matching each line's shape,
@@ -1940,9 +1943,11 @@ def number_anchor_matches(findings):
         if not matches:
             continue
         f["anchor_total"] = len(matches)
-        f["anchor_index"] = (matches.index(f["line"]) + 1
-                             if f["line"] in matches
-                             else sum(1 for n in matches if n <= f["line"]) or 1)
+        # The finding's own line always matches: every `add()` site passes
+        # `anchor_of(lines, X)` for the same X it passes as the line, against
+        # this same list. A guarded fallback here would be unreachable code in
+        # the one function that decides which line an approved fix edits.
+        f["anchor_index"] = matches.index(f["line"]) + 1
 
 
 def split_declined(findings, declined_path):
@@ -1951,9 +1956,6 @@ def split_declined(findings, declined_path):
     Without this a declined finding came back as `persisting` on every run.
     A punch list that keeps re-raising settled items trains the reader to
     skim, and then they skim past the P1 too.
-
-    Matching is per instance: by `occurrence` when the declined entry carries
-    one, falling back to nearest line for files written before it existed.
 
     Per instance, not per key. `finding_key` excludes the line number so a
     decline survives line shifts, and most rules emit a constant message, so N

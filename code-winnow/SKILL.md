@@ -135,7 +135,7 @@ done
 
 **Test the interpreter, do not just locate it.** `command -v python3` returns the Microsoft Store stub, which is on `PATH`, prints an install advert to stderr, and exits 49. So a bare `command -v` chain "succeeds" and every scanner call then fails. Running `"$c" -c ""` is the difference between present and working — verified on a machine where `command -v python3` resolves the stub.
 
-**Pin the scope flags too, and pass them on every later call.** Nine commands in this document invoke the scanner, and each one that omits the flags silently reviews a different thing: `--report-name` without them stamps a `_worktree_` stem onto a `--scope branch` review, and the Step 4 baseline and the Step 6 reconciliation then scan the wrong scope entirely while still producing a confident report. Step 2 writes all of these to a file so no later block has to remember them.
+**Pin the scope flags too, and pass them on every later call.** Every command in this document that invokes the scanner needs them, and each one that omits them silently reviews a different thing: `--report-name` without them stamps a `_worktree_` stem onto a `--scope branch` review, and the Step 4 baseline and the Step 6 reconciliation then scan the wrong scope entirely while still producing a confident report. Step 2 writes all of these to a file so no later block has to remember them.
 
 Three things this handles that a hand-rolled `git diff` ladder does not:
 
@@ -291,7 +291,21 @@ current<branch>_uncommitted_<YYYYMMDD-HHMM>    --scope unstaged
 current<branch>_files_<YYYYMMDD-HHMM>          --paths
 ```
 
-Five shapes, and the scope is in the name deliberately: Step 4's reconciliation looks for "the most recent `.code-winnow/*.json` **for the same scope**", and comparing a branch baseline against a worktree run reports differences that are only differences of scope.
+Five shapes, and the scope is in the name deliberately: Step 4's reconciliation looks for the most recent scanner JSON **for the same scope**, and comparing a branch baseline against a worktree run reports differences that are only differences of scope.
+
+### How the workspace is laid out
+
+```
+.code-winnow/
+  env.sh                     this run's state
+  declined.json              persistent across runs
+  <stem>.md                  this run's report
+  <stem>.fixplan.md          this run's plan
+  <stem>.json, .input.diff, .pre-fix/, .tests-*.list
+  round-01/ … round-NN/      every previous run, archived by Step 2
+```
+
+**The root only ever holds the run in progress.** Step 2 moves the previous run's dated artifacts into the next `round-NN/` before writing anything, so "which report is current" is answered by looking at the root rather than by comparing timestamps in a flat pile of forty files. Prior rounds stay readable and stay reachable by `--since`; nothing is deleted.
 
 Stdlib only, no install step. Paths resolve against the git toplevel, so the cwd does not matter as long as it is inside the repo. The default pass gives in-scope findings; that is the run that matters. `--whole-files` widens to the untouched lines *of the files the diff already touches* — no further. There is no repo-wide mode; auditing anything else requires the user to name files with `--paths`, which means asking for it.
 
@@ -299,7 +313,7 @@ It flags regex- and AST-level candidates: fields and locals declared and never r
 
 In test files it additionally flags tests with no assertion, assertions that cannot fail, tests whose every assertion checks a mock, structurally identical tests that differ only in literals, and skips with no reason. That pass runs for pytest/unittest, NUnit/xUnit/MSTest, GoogleTest, Go, Jest/Vitest/Mocha, JUnit, Rust, RSpec, and XCTest — a JS or Go test file gets it even though nothing else here understands JS or Go. `$WINNOW/references/tests.md` is the judgment standard.
 
-**Three of those rules are narrower than that list, and a report written from the list alone will claim coverage that did not happen:**
+**Three of the scanner's test rules are narrower than that list suggests, and a report written from the list alone will claim coverage that did not happen:**
 
 | Rule | Actual reach |
 |---|---|
@@ -344,6 +358,23 @@ STEM=$("$PY" "$WINNOW/scripts/scan.py" $SCOPE --report-name) || STEM=""
   echo "  2. the scope really is empty — nothing to review."
   echo "  3. \$PY or \$WINNOW is wrong."
   echo "Check 1 first; it looks identical to a clean tree and is not."; exit 0; }
+
+# Archive the previous run before this one writes anything. Every dated
+# artifact whose stem is not $STEM moves into the next round-NN/ folder, so the
+# workspace root only ever holds the run in progress plus env.sh and
+# declined.json. Rotating HERE and not in Step 0 is deliberate: cold entry at
+# Step 5 re-runs Step 0, and rotating there would archive the fix plan the
+# cold session was invoked to execute.
+PREV=$(find .code-winnow -maxdepth 1 -type f -name 'current*' ! -name "$STEM*" \
+       -o -maxdepth 1 -type d -name '*.pre-fix' ! -name "$STEM*" 2>/dev/null)
+if [ -n "$PREV" ]; then
+  N=$(printf '%02d' $(( $(ls -d .code-winnow/round-* 2>/dev/null | wc -l) + 1 )))
+  mkdir -p ".code-winnow/round-$N"
+  printf '%s\n' "$PREV" | while IFS= read -r p; do
+    [ -n "$p" ] && mv "$p" ".code-winnow/round-$N/"
+  done
+  echo "archived the previous run to .code-winnow/round-$N/"
+fi
 
 # One definition point for every later block. Written fresh each run.
 # The function goes IN the file: it is needed in later shells, and a shell
@@ -657,7 +688,14 @@ Never write `report.md`. Use `$STEM` from Step 2 so successive runs never overwr
 
 ### Reconciling with the previous run
 
-Find the most recent `.code-winnow/*.json` for the same scope **other than `$STEM.json`, which this run wrote minutes ago**, and pass it to `--since`.
+Find the most recent scanner JSON for the same scope and pass it to `--since`. **Look in the round folders, not just the root** — Step 2 archived the previous run there, so the root holds only this run:
+
+```bash
+# illustration only — the search, not a step to run
+ls -1t .code-winnow/round-*/*.json 2>/dev/null | grep -v -- '-postfix\|-p3\|-r2' | head -1
+```
+
+Exclude `$STEM.json`, which this run wrote minutes ago, and the derived `-postfix` outputs, which are reconciliation results rather than baselines.
 
 That exclusion is not pedantry. Step 2 writes the baseline before the agents are dispatched, so by Step 4 it *is* the newest JSON for this scope — reconcile against it and every finding comes back `persisting`, `resolved` is empty, and the report names this run as its own previous run. Write the reconciled output to `.code-winnow/$STEM-vs-<prior stem>.json`; never back over `$STEM.json`, which Step 6 still needs as the pre-fix baseline. If no earlier run exists, say "Previous run: none" and skip `--since` entirely. The scanner marks each live finding `new` or `persisting`, and returns the ones present last time and absent now in `resolved`. Matching is by file, rule, message, and the normalised source line, so several instances of the same rule in one file stay distinguishable and survive the line shifts that deleting other findings causes.
 
@@ -728,9 +766,9 @@ Every count in that header comes out of the JSON: `files`, `scanned_files`, `add
 
 Severity:
 
-- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode in real source (zero-width, non-breaking, bidi — *not* a leading BOM; inside a test or prose file the scanner demotes these to P2, or P3 for a non-breaking space or soft hyphen), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, machine names or secrets
+- **P1** — swallowed exceptions with a broad or bare `except`, validation removed from a trust boundary, tests that assert nothing or assert only on mocks, invisible Unicode in real source (zero-width, non-breaking, bidi — *not* a leading BOM; **inside a test file** the scanner demotes these to P2, and a non-breaking space or soft hyphen to P3 in a test *or* prose file — everything else in a prose file stays P1), unrooted `UObject*` members, mutable default arguments, committed developer-home paths, machine names or secrets
 - **P2** — speculative abstraction, defensive checks in trusted paths, unused fields, duplicated helpers, dead scaffolding, config knobs nothing sets, structurally duplicate tests, unused fixtures, `except SpecificError: pass`, `/home/...` paths
-- **P3** — comments restating code, generic naming, formatting churn on untouched lines, em dashes and smart quotes *in code* (the scanner exempts comments, docstrings and prose files; it does **not** exempt string literals, so leave typography alone in localized and user-facing strings yourself)
+- **P3** — comments restating code, generic naming, formatting churn on untouched lines, em dashes and smart quotes *in code* (the scanner exempts **whole-line** comments, Python triple-quoted regions and prose files; it does **not** exempt a trailing comment on a code line, nor string literals, so leave typography alone in localized and user-facing strings yourself)
 
 The "deliberately left alone" section matters more than it looks. Showing what you considered and rejected is what makes the rest credible — and it stops the next run re-flagging the same lines.
 

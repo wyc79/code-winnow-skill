@@ -111,6 +111,19 @@ SUITE_WITH_ONE_ASSERTION = (
     "    compute()\n"
 )
 
+# The same suite after the change deletes test_alpha's only assertion. Both
+# halves of the pair are constants: the "before" was extracted and the "after"
+# was left inline in each test, so the two copies could drift and the tests
+# would keep their names while pinning different edits.
+SUITE_AFTER_ASSERT_DELETED = (
+    "def test_alpha():\n"
+    "    result = compute()\n"
+    "\n"
+    "\n"
+    "def test_beta():\n"
+    "    compute()\n"
+)
+
 
 def test_a_deletion_only_change_is_not_an_empty_scope(repo):
     """The scope map is keyed on added lines, so a file that only lost lines
@@ -144,13 +157,7 @@ def test_a_test_the_diff_never_touched_stays_pre_existing(repo):
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "suite")
 
-    write(repo, "tests/test_x.py",                      # only the assert goes
-          "def test_alpha():\n"
-          "    result = compute()\n"
-          "\n"
-          "\n"
-          "def test_beta():\n"
-          "    compute()\n")
+    write(repo, "tests/test_x.py", SUITE_AFTER_ASSERT_DELETED)  # only the assert goes
 
     lines = rules(str(repo)).get("test-without-assertion", [])
     assert lines == [1], (           # line 1 is test_alpha, which the diff hit
@@ -163,13 +170,7 @@ def test_whole_files_still_surfaces_the_untouched_test(repo):
     write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "suite")
-    write(repo, "tests/test_x.py",
-          "def test_alpha():\n"
-          "    result = compute()\n"
-          "\n"
-          "\n"
-          "def test_beta():\n"
-          "    compute()\n")
+    write(repo, "tests/test_x.py", SUITE_AFTER_ASSERT_DELETED)
 
     lines = rules(str(repo), "--whole-files").get("test-without-assertion", [])
     assert 5 in lines, repr(lines)   # test_beta, pre-existing and asked for
@@ -613,37 +614,18 @@ def test_a_later_instance_of_a_declined_rule_still_surfaces(tmp_path):
     second = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py",
                             "--declined", str(tmp_path / "declined.json")).stdout)
     live = [f for f in second["findings"] if f["rule"] == "swallowed-exception"]
-    assert len(live) == 1 and live[0]["severity"] == "P1"
-
-
-def test_stacked_unity_attributes_keep_the_confirm_note(tmp_path):
-    """`is_exposed` looked at the declaration and exactly one line above, so
-    the verdict depended on how the author wrapped their attributes. Stacking
-    [Header]/[Tooltip] on their own lines is ordinary Unity style, and it was
-    the shape that lost the P3 'confirm before removing' note - on precisely
-    the serialized fields that must never be deleted unchecked."""
-    write(tmp_path, "Dash.cs",
-          "public class Dash {\n"
-          "    [SerializeField]\n"
-          '    [Tooltip("Curve used to shape the dash.")]\n'
-          "    private AnimationCurve tuningCurve;\n"
-          "\n"
-          "    [SerializeField, Range(0f, 1f)]\n"
-          "    private float dashDamping;\n"
-          "}\n")
-    data = json.loads(run(str(tmp_path), "--json", "--paths", "Dash.cs").stdout)
-    by_anchor = {f["anchor"]: f for f in data["findings"]
-                 if f["rule"] == "unused-binding"}
-    stacked = by_anchor["private AnimationCurve tuningCurve;"]
-    adjacent = by_anchor["private float dashDamping;"]
-    assert stacked["severity"] == adjacent["severity"] == "P3"
-    assert "confirm" in stacked["message"]
+    # Pin WHICH instance survived, not just that one did: declining the wrong
+    # sibling leaves exactly one live P1 too, and the test stayed green for it.
+    assert [f["occurrence"] for f in live] == [2], (
+        "the surviving finding must be the later instance, not the declined one")
+    assert live[0]["severity"] == "P1"
 
 
 @pytest.mark.parametrize("attrs,label", [
     ("    [SerializeField]\n    [Tooltip(\"stacked\")]\n", "one per line"),
     ("    [Tooltip(\"two groups\")] [SerializeField]\n", "two groups, one line"),
     ("    [SerializeField,\n     Range(0f, 1f)]\n", "wrapped attribute list"),
+    ("    [SerializeField, Range(0f, 1f)]\n", "single-line attribute group"),
     ("    [Header(\"Cooldown\")]\n    [SerializeField]\n", "header then field"),
     # The `//` branch that decided these was unreachable dead code: strip_code
     # blanks comments before the shape test, so a documented serialized field
@@ -681,7 +663,6 @@ def test_declining_one_instance_picks_that_instance_after_a_line_shift(tmp_path)
     swallowed = [f for f in first["findings"] if f["rule"] == "swallowed-exception"]
     assert [f["occurrence"] for f in swallowed] == [1, 2]
 
-    # Decline the SECOND one.
     (tmp_path / "declined.json").write_text(
         json.dumps({"findings": [swallowed[1]]}), encoding="utf-8")
 
@@ -695,25 +676,43 @@ def test_declining_one_instance_picks_that_instance_after_a_line_shift(tmp_path)
     assert [f["occurrence"] for f in live] == [1]
 
 
-# Each fixture is built so the comment rule WOULD fire without the exemption:
-# `restated-comment` needs high word overlap with the line below, so the
-# following line echoes the directive's own words. The previous version of this
-# test used `value = 1` for every case, which no comment rule can match — all
-# twelve passed with the exemption stubbed out, verifying nothing.
-@pytest.mark.parametrize("line,body,lang", [
+# Every row here must be able to fire WITHOUT the exemption, or it proves
+# nothing about the exemption. `restated-comment` needs >=2 words of >=3
+# letters in the comment and >=0.6 overlap with the line below, so each body
+# echoes its directive's own words. Two directives appear in their multi-word
+# forms because the short ones (`# noqa: F401`, `// NOLINTNEXTLINE`) reduce to
+# a single word and can never reach the two-word floor, whatever follows them.
+#
+# `test_every_directive_fixture_would_fire_without_the_exemption` enforces that
+# per row. It has to: a partly-vacuous parametrized set still fails SOME cases,
+# so check_mutations.py's `directive-exemption` row reported "ok, 6 caught it"
+# while 7 of 12 rows passed against a scanner with no exemption at all. A green
+# mutation run is not evidence about any individual row.
+DIRECTIVE_FIXTURES = [
     ("//go:embed templates", "var templates embed.FS", "config.go"),
-    ("//go:generate stringer -type=Kind", "type Kind int", "config.go"),
-    ("// Code generated by protoc. DO NOT EDIT.", "type Generated struct{}", "config.go"),
-    ("//nolint:errcheck", "func errcheck() {}", "config.go"),
-    ("# noqa: F401", "import readline", "t.py"),
+    ("//go:generate stringer -type=Kind", "type generateStringerKind int", "config.go"),
+    ("// Code generated by protoc. DO NOT EDIT.",
+     "type CodeGeneratedProtocEdit struct{}", "config.go"),
+    ("//nolint:errcheck", "func nolintErrcheck() {}", "config.go"),
+    ("# ruff: noqa", "ruff_noqa = True", "t.py"),
+    ("# noqa: F401 unused import", "unused_import_noqa = readline", "t.py"),
     ("# fmt: off", "fmt_off_matrix = 1", "t.py"),
-    ("# pragma: no cover", "def cover_pragma(): pass", "t.py"),
+    # `# pragma: no cover` is deliberately NOT here: `pragma` is a C
+    # preprocessor keyword, so RE_PREPROCESSOR exempts it inside comment_body
+    # one step before is_directive is consulted. It is exempt for a real
+    # reason, by a different guard, and would survive this table's mutation.
+    ("# isort: skip", "isort_skip = 1", "t.py"),
     ("# frozen_string_literal: true", "frozen_string_literal = true", "t.rb"),
     ("// @ts-expect-error", "const tsExpectError = 1;", "t.ts"),
-    ("// eslint-disable-next-line no-console", "console.log(1);", "t.ts"),
+    ("// eslint-disable-next-line no-console",
+     "const eslintDisableNextLineConsole = console;", "t.ts"),
     ("// clang-format off", "int clang_format_off = 1;", "t.cpp"),
-    ("// NOLINTNEXTLINE", "int nolint_next_line = 1;", "t.cpp"),
-])
+    ("// NOLINTNEXTLINE(bugprone-branch-clone)",
+     "int bugproneBranchCloneNolintnextline = 1;", "t.cpp"),
+]
+
+
+@pytest.mark.parametrize("line,body,lang", DIRECTIVE_FIXTURES)
 def test_directive_comments_are_not_comment_candidates(tmp_path, line, body, lang):
     """A comment a tool reads carries no prose, restates nothing and contains
     no 'because', so every comment rule here voted to delete it. `//go:embed`
@@ -728,20 +727,44 @@ def test_directive_comments_are_not_comment_candidates(tmp_path, line, body, lan
     assert not hit, f"{line} treated as prose: {hit}"
 
 
-def test_the_directive_fixtures_would_actually_fire_without_the_exemption(tmp_path):
-    """Guards the guard: proves the fixtures above can trigger the rule, so a
-    future edit cannot quietly make them vacuous again. `is_directive` is the
-    exemption, checked inside `comment_body` ahead of `RE_COMMENT`, so the same
-    text without it must produce the finding the exemption exists to suppress."""
+@pytest.mark.parametrize("line,body,lang", DIRECTIVE_FIXTURES)
+def test_every_directive_fixture_would_fire_without_the_exemption(line, body, lang):
+    """Guards the guard, per row, over the same table.
+
+    The previous version asserted on one hand-written string that appeared in
+    no fixture row, so it could not detect the failure it existed to prevent -
+    and that failure happened: 7 of 12 rows passed against a scanner with no
+    directive exemption at all, verifying nothing about the exemption they are
+    named for. Asserting on the table itself is what makes a new row prove
+    something before it is trusted.
+
+    Reproduces `restated-comment`'s own conditions rather than the rule: >=2
+    words of >=3 letters in the comment, >=0.6 overlap with the line below.
+    `RE_PREPROCESSOR` is checked too, because it exempts a line one step ahead
+    of `is_directive` - which is why `# pragma:` is not in the table.
+    """
     import importlib.util
     spec = importlib.util.spec_from_file_location("scanmod", SCAN)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.comment_body("//go:embed templates") is None
-    # The same text, if it were NOT a directive, is comment prose - which is
-    # what feeds restated-comment.
-    assert mod.is_directive("//go:embed templates")
-    assert mod.comment_body("// embed templates here") == "embed templates here"
+
+    assert mod.is_directive(line), f"{line!r} is not recognised as a directive"
+    assert not mod.RE_PREPROCESSOR.match(line), (
+        f"{line!r} is exempted by RE_PREPROCESSOR before is_directive is "
+        "consulted, so this row cannot pin the directive exemption")
+
+    m = mod.RE_COMMENT.match(line)
+    assert m, f"{line!r} does not parse as a comment at all"
+    cw = set(mod.words(m.group(1).strip()))
+    assert len(cw) >= 2, (
+        f"{line!r} yields {sorted(cw)} - restated-comment needs two words of "
+        "three or more letters, so this row can never fire and proves nothing")
+    kw = set(mod.words(body))
+    overlap = len(cw & kw) / len(cw)
+    assert overlap >= 0.6, (
+        f"{line!r} over {body!r}: overlap {overlap:.2f} < 0.6, so the rule "
+        f"would not fire without the exemption. comment={sorted(cw)} "
+        f"code={sorted(kw)}")
 
 
 @pytest.mark.parametrize("cp,name", [

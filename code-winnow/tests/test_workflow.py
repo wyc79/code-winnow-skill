@@ -205,8 +205,8 @@ def test_step0_preserves_an_exclude_file_with_no_trailing_newline(repo):
     (repo / ".git" / "info" / "exclude").write_bytes(b"build/")   # no newline
     _, _, body = _find_block("EXCLUSION FAILED")
     run_block(body, str(repo))
-    (repo / "build").mkdir(exist_ok=True)
-    (repo / "build" / "o.tmp").write_text("x", encoding="utf-8")
+    # No `build/` directory is created: check-ignore matches on pathname and
+    # does not require the path to exist, so creating it changed nothing.
     still = subprocess.run(["git", "check-ignore", "-q", "build/"],
                            cwd=repo, capture_output=True)
     assert still.returncode == 0, "the user's build/ rule was destroyed"
@@ -327,6 +327,41 @@ def test_review_input_on_a_clean_tree_branch_review(tmp_path):
     assert diffs and diffs[0].stat().st_size > 0, (
         "clean-tree branch review produced an empty review input - the agents "
         "would report nothing while the scanner holds findings")
+
+
+@requires_bash
+def test_step2_archives_the_previous_run_into_a_round_folder(repo):
+    """The workspace root must hold only the run in progress. A flat pile of
+    every run's report, JSON, diff and backup makes "which one is current" a
+    timestamp comparison, and the answer is wrong the moment two runs share a
+    minute. Rotation lives in Step 2, not Step 0, because cold entry re-runs
+    Step 0 and would archive the plan it was invoked to execute."""
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo))
+    subs = {"<absolute path to this skill's directory>": WINNOW}
+    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
+
+    ws = repo / ".code-winnow"
+    stale = "currentmain_worktree_19990101-0000"
+    (ws / f"{stale}.md").write_text("old report\n", encoding="utf-8")
+    (ws / f"{stale}.json").write_text("{}\n", encoding="utf-8")
+    (ws / f"{stale}.pre-fix").mkdir()
+    (ws / "declined.json").write_text('{"findings": []}\n', encoding="utf-8")
+
+    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+
+    rounds = list(ws.glob("round-*"))
+    assert len(rounds) == 1, f"expected one round folder, got {rounds}"
+    archived = {q.name for q in rounds[0].iterdir()}
+    assert f"{stale}.md" in archived and f"{stale}.json" in archived, archived
+    assert f"{stale}.pre-fix" in archived, "the backup directory was left behind"
+
+    assert not (ws / f"{stale}.md").exists(), "stale report still at the root"
+    assert (ws / "declined.json").exists(), "declined.json must survive rotation"
+    assert (ws / "env.sh").exists(), "env.sh is this run's state, not the last one's"
+    current = [q.name for q in ws.glob("current*") if q.is_file()]
+    assert current and all(stale not in n for n in current), (
+        f"the root must hold only this run's artifacts, found {current}")
 
 
 @requires_bash

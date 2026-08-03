@@ -69,7 +69,7 @@ code-winnow/
   SKILL.md                 # Agent instructions
   scripts/scan.py          # Deterministic candidate scanner
   references/              # Judgment standards (patterns, languages, tests, portability)
-  tests/                   # Scanner tests
+  tests/                   # Scanner tests, SKILL.md workflow harness, mutation check
 ```
 
 ## Scanner (standalone)
