@@ -1730,10 +1730,33 @@ def test_tautological_assert_fires_in_a_brace_language_test(tmp_path):
 # long time while no rule detected either - the doc asserted coverage the
 # scanner did not have, which is the exact failure the report rules elsewhere
 # call out. These pin what is actually implemented.
+#
+# EVERY FIXTURE BELOW IS ASSEMBLED FROM PIECES, never written as a literal,
+# so that scanning *this* file does not trip the rule it tests. `write()`
+# receives the concatenated string either way, so the file the scanner reads
+# is byte-identical - only this file's own text changes.
+#
+# That is not tidiness. A detector whose own suite trips it leaves four
+# permanent P1s in this repo, and P1 is the one bucket the report rules say
+# never to cut. The obvious alternative - demoting secrets in test files, the
+# way `local-path` and `unicode-invisible` demote - would hide real leaks in
+# real users' test directories, which is where keys most often leak. So the
+# fixture moves and the rule stays strict.
+#
+# `test_no_fixture_in_this_file_trips_the_secrets_rule` at the end of this
+# section is what keeps it that way.
 # --------------------------------------------------------------------------
 
+AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLQ"
+AWS_DOC_EXAMPLE = "AKIA" + "IOSFODNN7EXAMPLE"
+PEM_RSA = "-----BEGIN " + "RSA PRIVATE KEY-----"
+PEM_PKCS8 = "-----BEGIN " + "PRIVATE KEY-----"
+REAL_PW = "Tr0ub4dor&3" + "xx"
+REAL_PW_2 = "Tr0ub4dor&3" + "xy"
+
+
 def test_aws_access_key_is_a_p1(tmp_path):
-    write(tmp_path, "conf.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLQ"\n')
+    write(tmp_path, "conf.py", 'AWS_ID = "' + AWS_KEY + '"\n')
     assert severities(str(tmp_path), "--paths", "conf.py")[
         "committed-secret"] == ["P1"]
 
@@ -1756,7 +1779,7 @@ def test_vendor_token_formats_are_detected(tmp_path, literal, why):
 
 
 def test_private_key_block_is_a_p1(tmp_path):
-    write(tmp_path, "id.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n")
+    write(tmp_path, "id.pem", PEM_RSA + "\nMIIE\n")
     assert severities(str(tmp_path), "--paths", "id.pem")[
         "committed-secret"] == ["P1"]
 
@@ -1764,7 +1787,7 @@ def test_private_key_block_is_a_p1(tmp_path):
 def test_pkcs8_private_key_header_is_detected(tmp_path):
     """The bare form carries no algorithm word, so a pattern requiring one
     misses the commonest modern export."""
-    write(tmp_path, "k.pem", "-----BEGIN PRIVATE KEY-----\nMIIE\n")
+    write(tmp_path, "k.pem", PEM_PKCS8 + "\nMIIE\n")
     assert "committed-secret" in rules(str(tmp_path), "--paths", "k.pem")
 
 
@@ -1779,7 +1802,7 @@ def test_a_vendor_token_in_a_test_file_is_still_a_p1(tmp_path):
 
 
 def test_named_password_assignment_is_flagged(tmp_path):
-    write(tmp_path, "db.py", 'password = "Tr0ub4dor&3xx"\n')
+    write(tmp_path, "db.py", 'password = "' + REAL_PW + '"\n')
     assert "committed-secret" in rules(str(tmp_path), "--paths", "db.py")
 
 
@@ -1824,7 +1847,7 @@ def test_named_assignment_demotes_in_prose_but_a_token_does_not(tmp_path):
     mostly examples; a vendor-format token is a match on a format and a README
     is a perfectly ordinary place to leak one."""
     write(tmp_path, "README.md",
-          'Set `password = "Tr0ub4dor&3xy"` in your config.\n')
+          'Set `password = "' + REAL_PW_2 + '"` in your config.\n')
     assert severities(str(tmp_path), "--paths", "README.md")[
         "committed-secret"] == ["P2"]
 
@@ -1874,7 +1897,7 @@ def test_a_vendor_documentation_example_is_not_flagged(tmp_path):
     every config sample in every repo. Matching the format is what makes this
     rule safe to run everywhere; exempting the documented example is what
     stops it firing on the copy of the documentation."""
-    write(tmp_path, "sample.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLE"\n')
+    write(tmp_path, "sample.py", 'AWS_ID = "' + AWS_DOC_EXAMPLE + '"\n')
     assert "committed-secret" not in rules(str(tmp_path), "--paths", "sample.py")
 
 
@@ -1936,8 +1959,30 @@ def test_a_secret_is_never_proposed_for_deletion_by_severity_alone(tmp_path):
     the fix is out of this skill's hands. Deleting the line leaves the
     credential in git history, so a message that reads like an ordinary
     delete-this finding would invite exactly the wrong fix."""
-    write(tmp_path, "c.py", 'AWS_ID = "AKIAIOSFODNN7EXAMPLQ"\n')
+    write(tmp_path, "c.py", 'AWS_ID = "' + AWS_KEY + '"\n')
     data = json.loads(run(str(tmp_path), "--json", "--paths", "c.py").stdout)
     msg = [f["message"] for f in data["findings"]
            if f["rule"] == "committed-secret"][0]
     assert "rotate" in msg and "history" in msg, msg
+
+
+def test_no_fixture_in_this_file_trips_the_secrets_rule(tmp_path):
+    """The guard that keeps the assembled-fixture convention from eroding.
+
+    Scan this test file with the rule it tests. A contributor who adds one
+    literal credential fixture - the obvious, readable thing to write - puts a
+    permanent P1 in this repo, and it would be reported on every run of the
+    skill over its own source until someone declined it. Catching that here
+    costs one scan; noticing it in a report six months later costs the
+    credibility of the P1 bucket.
+    """
+    here = os.path.abspath(__file__)
+    data = json.loads(run(os.path.dirname(here), "--json",
+                          "--paths", os.path.basename(here)).stdout)
+    tripped = [f for f in data["findings"]
+               if f["rule"] in ("committed-secret", "internal-host")]
+    assert not tripped, (
+        "this file's own fixtures trip the rule they test - assemble them "
+        "from pieces, as the constants at the top of this section do:\n  "
+        + "\n  ".join(f"{f['severity']} line {f['line']}: {f['anchor'][:60]}"
+                      for f in tripped))

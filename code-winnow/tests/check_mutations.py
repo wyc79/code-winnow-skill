@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
 SCAN = os.path.join(WINNOW, "scripts", "scan.py")
 SKILL = os.path.join(WINNOW, "SKILL.md")
+TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
 
 
 # (name, target_file, find, replace_with, pytest -k expression that MUST fail)
@@ -173,6 +174,16 @@ if not m.group(1).upper().startswith("APPROVED"):
      r'r"(?<![A-Za-z0-9:_])\\{2,4}',
      r'r"\\{2,4}',
      "drive_path"),
+
+    # A test file is a mutation target too. The secrets fixtures are assembled
+    # from pieces so that scanning test_scan.py does not trip the rule it
+    # tests; writing one as a literal is the obvious, readable thing a
+    # contributor would do, and it silently puts a permanent P1 in this repo.
+    # The key is spliced here for the same reason it is spliced there.
+    ("secret-fixture-assembled", TEST_SCAN,
+     'AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLQ"',
+     'AWS_KEY = "AKIA' + 'IOSFODNN7EXAMPLQ"',
+     "no_fixture_in_this_file"),
 ]
 
 
