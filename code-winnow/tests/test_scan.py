@@ -1901,20 +1901,39 @@ def test_a_vendor_documentation_example_is_not_flagged(tmp_path):
     assert "committed-secret" not in rules(str(tmp_path), "--paths", "sample.py")
 
 
-@pytest.mark.parametrize("word", ["none", "nil", "test", "secret", "dummy"])
+@pytest.mark.parametrize("word", ["none", "nil", "test", "secret", "dummy",
+                                  "example", "sample"])
 def test_a_real_token_containing_a_filler_word_is_still_flagged(tmp_path, word):
-    """The exemption for tokens must not be the placeholder word list.
+    """The exemption for tokens must not be a substring test of any list.
 
     A GitHub token is 36 random characters, so a chance `nil` or `test`
     substring turns up in a few percent of genuine ones. Running the filler
     list over a token therefore drops live credentials silently, at a rate
     nobody would ever notice - a false negative on the one rule where that is
-    the worst outcome available. Only the vendor's own doc markers exempt.
+    the worst outcome available.
+
+    `example` and `sample` were the two that stayed. They are longer, so they
+    are rarer, but rarer is not never and the failure is the same one: a
+    well-formed token whose body happened to contain those letters was dropped
+    in silence, not demoted. Only a *trailing* marker exempts now - which is
+    where a vendor actually puts one, and is what the test below pins.
     """
     tok = "ghp_" + "a" * 16 + word + "b" * (20 - len(word))
     write(tmp_path, "c.py", f'TOKEN = "{tok}"\n')
     assert "committed-secret" in rules(str(tmp_path), "--paths", "c.py"), \
         f"a real token containing {word!r} was silently exempted"
+
+
+@pytest.mark.parametrize("marker", ["example", "sample", "EXAMPLE"])
+def test_a_token_ending_in_a_vendor_doc_marker_is_still_exempt(tmp_path, marker):
+    """The other half of the pair above, and the reason the exemption exists
+    at all. Narrowing a substring test to a suffix must not quietly delete the
+    behaviour it was narrowed from: a vendor's published key still has to be
+    silent, or the rule fires on every config sample that copied one."""
+    tok = "ghp_" + "a" * (36 - len(marker)) + marker
+    write(tmp_path, "s.py", f'TOKEN = "{tok}"\n')
+    assert "committed-secret" not in rules(str(tmp_path), "--paths", "s.py"), \
+        f"a documented example ending in {marker!r} should not be reported"
 
 
 def test_unc_path_in_an_escaped_source_literal_is_detected(tmp_path):
@@ -1985,4 +2004,30 @@ def test_no_fixture_in_this_file_trips_the_secrets_rule(tmp_path):
         "this file's own fixtures trip the rule they test - assemble them "
         "from pieces, as the constants at the top of this section do:\n  "
         + "\n  ".join(f"{f['severity']} line {f['line']}: {f['anchor'][:60]}"
+                      for f in tripped))
+
+
+def test_no_example_in_the_scanner_source_trips_the_secrets_rule():
+    """The same guard, pointed at `scan.py`, because the same mistake lands
+    there by a different route.
+
+    The test file leaks through a *fixture*; the scanner leaks through a
+    *docstring*. Every secrets pattern here is documented with an example of
+    what it matches, and writing one of those out in full - the obvious,
+    readable thing to do - puts a permanent P1 in the scanner's own source,
+    reported on every run of this skill over its own repo. This was a live
+    near-miss, not a hypothetical: the fix that narrowed
+    `looks_like_documented_example` was first written with a well-formed
+    40-character token in its docstring, and the self-scan is what caught it.
+
+    Describe the shape, splice the constant, or elide the middle.
+    """
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "scripts", "scan.py")
+    data = json.loads(run(os.path.dirname(src), "--json",
+                          "--paths", os.path.basename(src)).stdout)
+    tripped = [f for f in data["findings"] if f["rule"] == "committed-secret"]
+    assert not tripped, (
+        "the scanner's own source carries a well-formed credential:\n  "
+        + "\n  ".join(f"{f['severity']} line {f['line']}: {f['anchor'][:70]}"
                       for f in tripped))

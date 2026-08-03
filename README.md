@@ -6,7 +6,7 @@ Generated code is rarely wrong; it is bloated, over-defensive, and stylistically
 
 It also asks two questions about the change that a green test suite cannot answer: **how does this break silently**, and **what did it make slow**. Both are gated hard — the fragility pass reports only what the diff did and only where no test could catch it, and the performance pass reports nothing it cannot attach a call frequency to.
 
-**This is a diff review, not a repo audit.** It operates only on lines the current change added or modified. It does not hunt bugs and it is **not a security review** — use a dedicated tool for that. Two security-shaped things it does report: a protection *this change removed*, quoted from the diff's own `-` side, and a credential committed in a recognised vendor format. Neither is ever auto-fixed — you cannot un-leak a key by deleting the line.
+**This is a diff review, not a repo audit.** It operates only on lines the current change added or modified. It does not hunt bugs and it is **not a security review** — use a dedicated tool for that. Two security-shaped things it does report: a protection *this change removed*, quoted from the diff's own `-` side, and a committed credential. The credential pass is split by what each half is good at — the scanner matches self-identifying vendor formats (`AKIA…`, `ghp_…`, `sk_live_…`, PEM blocks), and the silent-failure agent reads the added lines for a named credential assigned a literal, which is the half no pattern reaches: `DB_PASSWORD`, `db_password`, `"db_password":` in a config file. Neither is ever auto-fixed — you cannot un-leak a key by deleting the line.
 
 ## When to use
 

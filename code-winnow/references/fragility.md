@@ -24,6 +24,8 @@ Every finding answers both halves. Neither alone is enough.
 
 Both halves, every time. The gate is short on purpose: it has to survive being read at the end of a long prompt.
 
+**One class answers the gate in different words and is not exempt from it: a committed credential.** *How it breaks:* the key is valid, published, and usable by anyone who can read the repo. *Why no test catches it:* no suite has ever failed over a key that works. Read literally, "name the runtime failure" would drop the purest example of a defect with no signal, so it is written out here rather than left to be inferred. See "Committed credentials" below.
+
 ## The catalogue
 
 Not exhaustive — the gate above outranks any list, and a shape absent from here that passes both tests is still a finding. These are the ones that recur in generated diffs.
@@ -91,6 +93,42 @@ Not *"is this code vulnerable"* — that is out of scope and you must not go loo
 
 This is the mirror of a rule already in `SKILL.md`. "Never touch validation at a trust boundary" stops the *cleanup* from deleting one; this stops the *diff under review* from having deleted one silently. Two halves of one concern, and neither covers the other.
 
+## Committed credentials
+
+The second security-shaped thing that is yours, and the last one. Everything else in that direction stays out of scope.
+
+**The scanner already owns the half a pattern can do.** Self-identifying vendor formats — `AKIA…`, `ghp_…`, `github_pat_…`, `glpat-…`, `xox…`, `sk_live_…`, `sk-ant-…`, `AIza…`, `npm_…`, a `-----BEGIN … PRIVATE KEY-----` block. Do not repeat those; they are already in the report as `committed-secret`.
+
+**Yours is the half it cannot reach: a named credential assigned a literal.** The scanner's rule for that is anchored on a word boundary and a bare `[:=]`, which means it sees `password = "…"` and misses every real-world spelling around it:
+
+```
+password     = "…"     scanner sees it
+DB_PASSWORD  = "…"     missed - no word boundary before PASSWORD
+db_password  = "…"     missed - same
+smtp_password: "…"     missed - same
+"db_password": "…"     missed - the quote blocks the separator
+```
+
+That last one is `appsettings.json`, `config.yml`, `.env.example` gone wrong — the commonest place a committed password actually lives, under the commonest name it is actually given. Widening the pattern is not the fix: credential names are unbounded, and a pattern loose enough to catch them all is loose enough to fire on every `*_key` and `*_token` in the repo. This is a reading job.
+
+**Four rules, and the first is the one that keeps this pass trustworthy:**
+
+**You are reading, not scoring.** Do not run entropy in your head. A hash, a UUID, a git sha, a base64 blob and a minified bundle all look random and none of them is a secret. `core-patterns.md` refuses an entropy heuristic on purpose — a noisy secrets rule teaches the reader to skim, and what they skim past is the P1 three sections down. The question is whether the *name* says credential and the *value* is a real one, never whether the value looks random.
+
+**Placeholders and indirection are not findings.** `${DB_PASSWORD}`, `{{ vault_pw }}`, `<your-api-key>`, `changeme`, `xxxxxxxx`, an obviously redacted value, a vendor's published example. Nor is a value read rather than written — `os.environ[…]`, `Configuration["…"]`, a secrets-manager call. That is the correct pattern, and flagging it is how a security pass loses its audience in one run.
+
+**P1, and it does not demote in a test or prose file.** Every other universal rule demotes in a fixture, because a home path in a fixture is data. A live credential is not data, and a test directory is where keys most often leak.
+
+**Never propose a fix.** This is the one finding class that is reported and never patched, at any severity and however clearly worded. Deleting the line does not un-leak the key — it is already in the object store, in every clone, and in every CI cache that fetched it. Write:
+
+```
+fix:      out of scope - rotate the credential; deleting the line leaves it in history
+```
+
+A patch here would hand the user an all-clear they have not earned, which is a worse outcome than not detecting it at all.
+
+**Diff lines only, like everything else in this file.** A credential on a line this change did not touch is not yours — note it under pre-existing if you had the file open anyway, and do not go looking. Sweeping a repo for keys is the security audit this skill opens by refusing, and it is a job for a tool with a rotation workflow behind it.
+
 ## E vetoes A's deletions
 
 Agent A proposes removing code. E is the reader who knows what removal breaks. When A proposes deleting a line E identifies as load-bearing — a GC root, a directive, a type carrier, a trust-boundary check, a registration anchor, a side-effect import — **E wins**, and Step 3.5 dismisses A's finding into "Deliberately left alone" with E's reason.
@@ -101,7 +139,7 @@ Both passes stay. They are the same questions at two different moments, and the 
 
 ## Severity
 
-- **P1** — silent corruption, silent data loss, a removed protection on a reachable path, or any failure with no observable signal at all
+- **P1** — silent corruption, silent data loss, a removed protection on a reachable path, a committed credential, or any failure with no observable signal at all
 - **P2** — fragility that surfaces loudly when it breaks (a crash, a log, a visible error) but that nothing tests; a newly-added suppression; a desync that needs a future edit to trigger
 - **P3** — E should essentially never produce one. If a finding is cosmetic, it failed the gate, and it is Agent A's
 
@@ -112,7 +150,7 @@ Many E findings cannot be fixed by this skill, and that is expected rather than 
 `SKILL.md` Step 5b already binds every fix: *behavior stays identical; if a fix would change behavior, it is not a winnowing fix — surface it separately and leave it.* E inherits that rule with no new machinery:
 
 - **Fix-plan eligible** when the change preserves behaviour and is local — add the missing `await`, narrow a catch to the expected type, replace a duplicated constant with a reference to the original, restore a removed validation call, stop a coroutine in `OnDisable`.
-- **Reported and left** when the fix is a design decision — a save migration, a cache invalidation strategy, a locking scheme, a schema backfill. Write `fix: out of scope — <why>` and propose nothing.
+- **Reported and left** when the fix is a design decision — a save migration, a cache invalidation strategy, a locking scheme, a schema backfill. Write `fix: out of scope — <why>` and propose nothing. **Every committed credential is in this bucket by construction**, for a different reason than the rest: the repair is a rotation, which is not a behaviour-preserving edit and not this skill's to make.
 
 An out-of-scope finding still goes in the main report at its own severity. It is not demoted for being unfixable here, and it is not moved to a side document — burying a P1 because this pass cannot repair it is the failure mode this whole arrangement exists to avoid.
 

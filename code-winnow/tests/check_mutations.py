@@ -157,6 +157,25 @@ if not m.group(1).upper().startswith("APPROVED"):
      "elif m_token and not looks_like_placeholder(m_token.group(0)):",
      "filler_word"),
 
+    # Same argument, one rung finer, and the rung the shipped code was on: the
+    # narrowed list was still applied as a *substring*, so a well-formed token
+    # whose random body contained `sample` anywhere was dropped in silence.
+    # Anchoring at the end is the whole fix, and a suffix test is exactly what
+    # a careless "simplification" would widen back to `in`.
+    ("secret-token-exemption-anchoring", SCAN,
+     "    return token.lower().endswith(DOC_EXAMPLE_SUFFIXES)",
+     "    low = token.lower()\n"
+     "    return any(w in low for w in DOC_EXAMPLE_SUFFIXES)",
+     "filler_word"),
+
+    # The other direction. Deleting the exemption outright makes every copy of
+    # AWS's published `...EXAMPLE` key a P1, which is the false positive the
+    # exemption exists for - so the narrowing has to be pinned from both sides.
+    ("secret-doc-example-exemption", SCAN,
+     "    return token.lower().endswith(DOC_EXAMPLE_SUFFIXES)",
+     "    return False",
+     "vendor_doc_marker or documentation_example"),
+
     # Pinning the UNC separators to exactly two-then-one matches a config file
     # and misses every escaped source literal, which is the commoner form.
     ("unc-escaped-separators", SCAN,

@@ -784,7 +784,10 @@ PLACEHOLDER_WORDS = (
 
 # Vendors publish well-formed keys in their own documentation - AWS's is
 # `AKIAIOSFODNN7EXAMPLE` - and those get copied into config samples everywhere.
-DOC_EXAMPLE_MARKERS = ("example", "sample")
+# Anchored at the END of the token, which is where a vendor puts the marker.
+# A bare substring test drops a live key whose random body happens to contain
+# these letters; see `looks_like_documented_example`.
+DOC_EXAMPLE_SUFFIXES = ("example", "sample")
 
 
 def looks_like_placeholder(val):
@@ -814,9 +817,21 @@ def looks_like_documented_example(token):
     the placeholder list over a token therefore drops live credentials, at a
     rate nobody would notice, on the one rule where a false negative is the
     worst outcome available. Match only the markers a vendor actually uses.
+
+    That argument does not stop at the filler words, and this function used to
+    stop there anyway: `example` and `sample` were matched as substrings, so a
+    `gh?_` token whose 36 random characters happened to contain either word
+    anywhere - a well-formed, live key - was dropped in silence, not demoted.
+    (No literal here: writing one out would put a permanent P1 in this file,
+    which is why the fixtures in `test_scan.py` are assembled from pieces.)
+
+    Anchoring at the end keeps the exemption doing its actual job. A vendor
+    writes the marker as a suffix (`AKIAIOSFODNN7EXAMPLE`); a random body
+    carrying those letters somewhere in the middle is a token, and the whole
+    point of matching a format rather than guessing at entropy is that the
+    difference is knowable.
     """
-    low = token.lower()
-    return any(w in low for w in DOC_EXAMPLE_MARKERS)
+    return token.lower().endswith(DOC_EXAMPLE_SUFFIXES)
 
 
 def has_ticket(text):
