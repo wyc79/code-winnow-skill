@@ -101,6 +101,97 @@ def test_staged_file_does_not_eclipse_unstaged_work(repo):
     assert len(found.get("dead-local", [])) >= 2
 
 
+SUITE_WITH_ONE_ASSERTION = (
+    "def test_alpha():\n"
+    "    result = compute()\n"
+    "    assert result == 3\n"
+    "\n"
+    "\n"
+    "def test_beta():\n"
+    "    compute()\n"
+)
+
+
+def test_a_deletion_only_change_is_not_an_empty_scope(repo):
+    """The scope map is keyed on added lines, so a file that only lost lines
+    had no entry and the whole scan came back 'No diff found' on a tree with
+    real uncommitted work. Under `--scope auto` that was worse than a miss:
+    the empty result fell through to the branch diff and reviewed something
+    else, then reported on it as though it were the working tree."""
+    write(repo, "app.py", "def f():\n    a = 1\n    b = 2\n    return a\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "app")
+
+    write(repo, "app.py", "def f():\n    a = 1\n    return a\n")   # only cut
+
+    data = json.loads(run(str(repo), "--json").stdout)
+    assert data["files"] == 1, (
+        f"deletion-only change resolved to scope {data['scope']!r}: "
+        + repr(data["warnings"]))
+
+
+def test_a_diff_that_only_deletes_an_assertion_still_reports_the_test(repo):
+    """Scope was 'is this finding's line one the diff added', which no
+    deletion-only edit can satisfy. Removing a test's only assertion leaves
+    every surviving line untouched, so the now-assertionless test was filed
+    pre-existing and dropped: the change created a P1 and the scan printed
+    nothing. That is this skill's headline case."""
+    write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "suite")
+
+    write(repo, "tests/test_x.py",                      # only the assert goes
+          "def test_alpha():\n"
+          "    result = compute()\n"
+          "\n"
+          "\n"
+          "def test_beta():\n"
+          "    compute()\n")
+
+    found = rules(str(repo))
+    assert 1 in found.get("test-without-assertion", []), (
+        "deleting a test's only assertion produced no finding: " + repr(found))
+
+
+def test_a_test_the_diff_never_touched_stays_pre_existing(repo):
+    """The negative control. Attributing by span must not turn every edited
+    file into a repo audit - `test_beta` was committed assertion-free and the
+    diff does not reach it, so it stays out of the default run."""
+    write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "suite")
+
+    write(repo, "tests/test_x.py",
+          "def test_alpha():\n"
+          "    result = compute()\n"
+          "\n"
+          "\n"
+          "def test_beta():\n"
+          "    compute()\n")
+
+    lines = rules(str(repo)).get("test-without-assertion", [])
+    assert lines == [1], (           # line 1 is test_alpha, which the diff hit
+        "test_beta is at line 5, untouched by this diff, and must not be "
+        "reported on the default run: " + repr(lines))
+
+
+def test_whole_files_still_surfaces_the_untouched_test(repo):
+    """...and --whole-files is how you ask for it, unchanged."""
+    write(repo, "tests/test_x.py", SUITE_WITH_ONE_ASSERTION)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "suite")
+    write(repo, "tests/test_x.py",
+          "def test_alpha():\n"
+          "    result = compute()\n"
+          "\n"
+          "\n"
+          "def test_beta():\n"
+          "    compute()\n")
+
+    lines = rules(str(repo), "--whole-files").get("test-without-assertion", [])
+    assert 5 in lines, repr(lines)   # test_beta, pre-existing and asked for
+
+
 def test_runs_from_a_subdirectory(repo):
     """Paths come back relative to the git toplevel, so opening them from a
     subdirectory failed - silently, which read as a clean scan."""
@@ -489,6 +580,277 @@ def test_a_declined_finding_is_not_also_reported_resolved(tmp_path):
     assert second["resolved"] == []
     assert {f["rule"] for f in second["declined"]} == {"orphan-todo"}
     assert {f["rule"] for f in second["findings"]} == {"mutable-default"}
+
+
+def test_declining_one_instance_does_not_decline_its_siblings(tmp_path):
+    """`split_declined` tested set membership while `reconcile` counted
+    instances. `finding_key` excludes the line number and most rules emit a
+    constant message, so N occurrences in one file share a key - and declining
+    any one of them silently suppressed all N, including ones written later.
+    One judgment call became a permanent blind spot for a whole class of P1."""
+    write(tmp_path, "pay.py",
+          "def charge():\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n"
+          "def refund():\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n")
+    first = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py").stdout)
+    swallowed = [f for f in first["findings"] if f["rule"] == "swallowed-exception"]
+    assert len(swallowed) == 2, "fixture must produce two identical-anchor findings"
+
+    # The user declines exactly one of them.
+    (tmp_path / "declined.json").write_text(
+        json.dumps({"findings": swallowed[:1]}), encoding="utf-8")
+
+    second = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py",
+                            "--declined", str(tmp_path / "declined.json")).stdout)
+    live = [f for f in second["findings"] if f["rule"] == "swallowed-exception"]
+    gone = [f for f in second["declined"] if f["rule"] == "swallowed-exception"]
+    assert len(gone) == 1, "exactly the one they declined"
+    assert len(live) == 1, "the sibling must still be reported"
+    assert live[0]["severity"] == "P1"
+
+
+def test_a_later_instance_of_a_declined_rule_still_surfaces(tmp_path):
+    """The same defect from the other direction: code written *after* the
+    decline must not inherit the suppression."""
+    write(tmp_path, "pay.py",
+          "def charge():\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n")
+    first = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py").stdout)
+    swallowed = [f for f in first["findings"] if f["rule"] == "swallowed-exception"]
+    (tmp_path / "declined.json").write_text(
+        json.dumps({"findings": swallowed}), encoding="utf-8")
+
+    # A third function lands later with the same shape.
+    write(tmp_path, "pay.py",
+          "def charge():\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n"
+          "def payout():\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n")
+    second = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py",
+                            "--declined", str(tmp_path / "declined.json")).stdout)
+    live = [f for f in second["findings"] if f["rule"] == "swallowed-exception"]
+    assert len(live) == 1 and live[0]["severity"] == "P1"
+
+
+def test_stacked_unity_attributes_keep_the_confirm_note(tmp_path):
+    """`is_exposed` looked at the declaration and exactly one line above, so
+    the verdict depended on how the author wrapped their attributes. Stacking
+    [Header]/[Tooltip] on their own lines is ordinary Unity style, and it was
+    the shape that lost the P3 'confirm before removing' note - on precisely
+    the serialized fields that must never be deleted unchecked."""
+    write(tmp_path, "Dash.cs",
+          "public class Dash {\n"
+          "    [SerializeField]\n"
+          '    [Tooltip("Curve used to shape the dash.")]\n'
+          "    private AnimationCurve tuningCurve;\n"
+          "\n"
+          "    [SerializeField, Range(0f, 1f)]\n"
+          "    private float dashDamping;\n"
+          "}\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "Dash.cs").stdout)
+    by_anchor = {f["anchor"]: f for f in data["findings"]
+                 if f["rule"] == "unused-binding"}
+    stacked = by_anchor["private AnimationCurve tuningCurve;"]
+    adjacent = by_anchor["private float dashDamping;"]
+    assert stacked["severity"] == adjacent["severity"] == "P3"
+    assert "confirm" in stacked["message"]
+
+
+@pytest.mark.parametrize("attrs,label", [
+    ("    [SerializeField]\n    [Tooltip(\"stacked\")]\n", "one per line"),
+    ("    [Tooltip(\"two groups\")] [SerializeField]\n", "two groups, one line"),
+    ("    [SerializeField,\n     Range(0f, 1f)]\n", "wrapped attribute list"),
+    ("    [Header(\"Cooldown\")]\n    [SerializeField]\n", "header then field"),
+    # The `//` branch that decided these was unreachable dead code: strip_code
+    # blanks comments before the shape test, so a documented serialized field
+    # - the ordinary C# way to write one - silently lost the confirm note.
+    ("    [SerializeField]\n    /// <summary>Dash speed.</summary>\n", "/// doc comment between"),
+    ("    [SerializeField]\n    // set from the Inspector\n", "// comment between"),
+    ("    [SerializeField]\n    /* speed */\n", "/* block */ between"),
+])
+def test_every_attribute_wrapping_keeps_the_confirm_note(tmp_path, attrs, label):
+    """The first fix here gated on each line's *shape*, so the verdict
+    depended on how the author wrapped their attributes: a line literally
+    containing SerializeField was rejected as 'not an attribute line', and a
+    wrapped list's continuation has no leading bracket. Both fell back to P2
+    with no note - on the serialized fields that must never be deleted
+    unchecked. The regression test pinned only the shape that already worked."""
+    write(tmp_path, "Dash.cs",
+          "public class Dash {\n" + attrs + "    private float tuned;\n}\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "Dash.cs").stdout)
+    found = [f for f in data["findings"] if f["rule"] == "unused-binding"]
+    assert found, f"no unused-binding finding for {label}"
+    assert found[0]["severity"] == "P3", label
+    assert "confirm" in found[0]["message"], label
+
+
+def test_declining_one_instance_picks_that_instance_after_a_line_shift(tmp_path):
+    """Counting instances fixed the over-suppression and introduced a quieter
+    fault: the budget was spent in file order, so declining the finding at
+    line 9 silenced the one at line 4 - the user's stayed live and a
+    different live P1 vanished. Line proximity guesses wrong once anything
+    shifts, so identity is the occurrence index."""
+    body = ("def a():\n    try:\n        go()\n    except Exception:\n        pass\n"
+            "def b():\n    try:\n        go()\n    except Exception:\n        pass\n")
+    write(tmp_path, "pay.py", body)
+    first = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py").stdout)
+    swallowed = [f for f in first["findings"] if f["rule"] == "swallowed-exception"]
+    assert [f["occurrence"] for f in swallowed] == [1, 2]
+
+    # Decline the SECOND one.
+    (tmp_path / "declined.json").write_text(
+        json.dumps({"findings": [swallowed[1]]}), encoding="utf-8")
+
+    # Shift every line down by three.
+    write(tmp_path, "pay.py", "# a\n# b\n# c\n" + body)
+    second = json.loads(run(str(tmp_path), "--json", "--paths", "pay.py",
+                            "--declined", str(tmp_path / "declined.json")).stdout)
+    live = [f for f in second["findings"] if f["rule"] == "swallowed-exception"]
+    gone = [f for f in second["declined"] if f["rule"] == "swallowed-exception"]
+    assert [f["occurrence"] for f in gone] == [2], "declined the wrong instance"
+    assert [f["occurrence"] for f in live] == [1]
+
+
+# Each fixture is built so the comment rule WOULD fire without the exemption:
+# `restated-comment` needs high word overlap with the line below, so the
+# following line echoes the directive's own words. The previous version of this
+# test used `value = 1` for every case, which no comment rule can match — all
+# twelve passed with the exemption stubbed out, verifying nothing.
+@pytest.mark.parametrize("line,body,lang", [
+    ("//go:embed templates", "var templates embed.FS", "config.go"),
+    ("//go:generate stringer -type=Kind", "type Kind int", "config.go"),
+    ("// Code generated by protoc. DO NOT EDIT.", "type Generated struct{}", "config.go"),
+    ("//nolint:errcheck", "func errcheck() {}", "config.go"),
+    ("# noqa: F401", "import readline", "t.py"),
+    ("# fmt: off", "fmt_off_matrix = 1", "t.py"),
+    ("# pragma: no cover", "def cover_pragma(): pass", "t.py"),
+    ("# frozen_string_literal: true", "frozen_string_literal = true", "t.rb"),
+    ("// @ts-expect-error", "const tsExpectError = 1;", "t.ts"),
+    ("// eslint-disable-next-line no-console", "console.log(1);", "t.ts"),
+    ("// clang-format off", "int clang_format_off = 1;", "t.cpp"),
+    ("// NOLINTNEXTLINE", "int nolint_next_line = 1;", "t.cpp"),
+])
+def test_directive_comments_are_not_comment_candidates(tmp_path, line, body, lang):
+    """A comment a tool reads carries no prose, restates nothing and contains
+    no 'because', so every comment rule here voted to delete it. `//go:embed`
+    above its var was reported as 'comment restates the line below it' and
+    handed to the agent whose only verdicts are DELETE/KEEP/TIGHTEN."""
+    write(tmp_path, lang, f"{line}\n{body}\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", lang).stdout)
+    # Only rules that actually exist in scan.py — the earlier version asserted
+    # against "hedged-comment" and "section-header", neither of which is real.
+    comment_rules = {"restated-comment", "commented-code", "orphan-todo"}
+    hit = [f for f in data["findings"] if f["rule"] in comment_rules]
+    assert not hit, f"{line} treated as prose: {hit}"
+
+
+def test_the_directive_fixtures_would_actually_fire_without_the_exemption(tmp_path):
+    """Guards the guard: proves the fixtures above can trigger the rule, so a
+    future edit cannot quietly make them vacuous again. `strip_code` is what
+    the exemption routes around, so bypassing `is_directive` must produce the
+    finding the exemption exists to suppress."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scanmod", SCAN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    # With the directive recognised, it is not comment prose.
+    assert mod.comment_body("//go:embed templates") is None
+    # The same text, if it were NOT a directive, is comment prose - which is
+    # what feeds restated-comment.
+    assert mod.is_directive("//go:embed templates")
+    assert mod.comment_body("// embed templates here") == "embed templates here"
+
+
+@pytest.mark.parametrize("cp,name", [
+    (0x202A, "LRE"), (0x202B, "RLE"), (0x202C, "PDF"), (0x202D, "LRO"),
+    (0x202E, "RLO"), (0x2066, "LRI"), (0x2067, "RLI"), (0x2068, "FSI"),
+    (0x2069, "PDI"),
+])
+def test_every_trojan_source_control_is_detected(tmp_path, cp, name):
+    """Two of the nine bidi controls were covered while the docs advertised
+    'bidi' at P1. The isolate family is what CVE-2021-42574's proof of
+    concept uses, and U+202C is the terminator U+202E needs."""
+    write(tmp_path, "t.js", f'const s = "a{chr(cp)}b";\n')
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "t.js").stdout)
+    hit = [f for f in data["findings"] if f["rule"] == "unicode-invisible"]
+    assert hit and hit[0]["severity"] == "P1", f"{name} U+{cp:04X} missed"
+
+
+def test_nbsp_in_prose_is_not_a_p1_but_bidi_still_is(tmp_path):
+    """An NBSP in Markdown is routine - pasted text, an option-space, table
+    alignment - and it sorted to the top of 'P1 - Risk'. A bidi control in
+    prose is still an attack, because the reviewer reads the rendered form."""
+    write(tmp_path, "doc.md", "# Guide\n\nA line with a non-breaking space.\n")
+    write(tmp_path, "evil.md", "# Guide\n\nA‮line with an override.\n")
+    soft = json.loads(run(str(tmp_path), "--json", "--paths", "doc.md").stdout)
+    hard = json.loads(run(str(tmp_path), "--json", "--paths", "evil.md").stdout)
+    assert [f["severity"] for f in soft["findings"]
+            if f["rule"] == "unicode-invisible"] == ["P3"]
+    assert [f["severity"] for f in hard["findings"]
+            if f["rule"] == "unicode-invisible"] == ["P1"]
+
+
+def test_type_ignore_message_does_not_invite_deleting_the_directive(tmp_path):
+    """This candidate is read by the agent that owns comments, whose verdicts
+    are DELETE/KEEP/TIGHTEN. Deleting the directive fails the build under
+    warn_unused_ignores, so the message has to name the actual fix."""
+    write(tmp_path, "t.py", "x: int = compute()  # type: ignore[assignment]\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "t.py").stdout)
+    hit = [f for f in data["findings"] if f["rule"] == "type-ignore"]
+    assert hit and "do not delete the directive" in hit[0]["message"]
+
+
+@pytest.mark.parametrize("above,label", [
+    ("public class Widget {", "public class declaration"),
+    ("internal class Widget {", "internal class declaration"),
+    ("    public void Bar() { }", "public method"),
+])
+def test_a_declaration_above_a_private_field_is_not_an_attribute(tmp_path, above, label):
+    """EXPOSED was searched before any shape test on the first iteration, so
+    the line directly above was checked unconditionally - and `public class W {`
+    made every first private field in the class look serialized."""
+    write(tmp_path, "W.cs", "%s\n    private float scratch;\n}\n" % above)
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "W.cs").stdout)
+    found = [f for f in data["findings"] if f["rule"] == "unused-binding"]
+    assert found, label
+    assert found[0]["severity"] == "P2", f"{label}: falsely marked exposed"
+    assert "confirm" not in found[0]["message"], label
+
+
+def test_occurrence_is_numbered_in_file_order_not_ast_order(tmp_path):
+    """The Python rules emit through ast.walk, which is breadth-first, so a
+    nested handler arrived after a shallower one written below it. Numbering
+    on arrival gave occurrence 1 to the LAST match in the file - and SKILL.md
+    tells the executor to count anchor matches top to bottom."""
+    write(tmp_path, "deep.py",
+          "def outer():\n"
+          "    def inner():\n"
+          "        try:\n            go()\n        except Exception:\n            pass\n"
+          "    try:\n        go()\n    except Exception:\n        pass\n"
+          "try:\n    go()\nexcept Exception:\n    pass\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "deep.py").stdout)
+    hits = [f for f in data["findings"] if f["rule"] == "swallowed-exception"]
+    assert len(hits) == 3, hits
+    by_occ = sorted(hits, key=lambda f: f["occurrence"])
+    lines = [f["line"] for f in by_occ]
+    assert lines == sorted(lines), (
+        f"occurrence order {lines} is not file order - the executor counts "
+        "anchor matches top to bottom and would edit a different line")
+
+
+def test_a_plain_private_field_still_has_no_confirm_note(tmp_path):
+    """The attribute walk must not turn every field into an exposed one - a
+    preceding ordinary comment is not an attribute block."""
+    write(tmp_path, "Dash.cs",
+          "public class Dash {\n"
+          "    // cached each frame\n"
+          "    private float scratchValue;\n"
+          "}\n")
+    data = json.loads(run(str(tmp_path), "--json", "--paths", "Dash.cs").stdout)
+    found = [f for f in data["findings"] if f["rule"] == "unused-binding"]
+    assert found and found[0]["severity"] == "P2"
+    assert "confirm" not in found[0]["message"]
 
 
 def test_declined_file_that_is_not_a_report_is_a_warning_not_a_crash(tmp_path):

@@ -19,7 +19,7 @@ Generated code reaches for `?.` and `??` constantly because they are idiomatic C
 
 ## Per-frame cost
 
-**Empty lifecycle methods.** `void Start() { }`, `void Update() { }` left behind. Not free — Unity crosses the native/managed boundary to call every non-empty-at-compile-time `Update`, so an empty one on 500 objects is measurable. Delete them.
+**Empty lifecycle methods.** `void Start() { }`, `void Update() { }` left behind. Not free — Unity registers these by *declaration*, discovered when the script loads, and has no notion of an empty body. It crosses the native/managed boundary once per declared `Update` per frame regardless of what is inside, so an empty one on 500 objects is measurable. Delete them.
 
 **`GetComponent<T>()` in `Update`.** Cache in `Awake`. Same for `GetComponentInChildren`, `FindObjectOfType` (worse — scene-wide scan), and `gameObject.tag` comparisons in hot paths (`CompareTag` allocates less).
 

@@ -19,7 +19,7 @@ def get_user(user_id: int) -> User:
         The user.
     """
 ```
-Four lines conveying nothing the signature didn't. Delete, or replace with the part that isn't obvious — what happens when the user doesn't exist.
+Four lines conveying nothing the signature didn't. **Tighten to the part that isn't obvious** — what happens when the user doesn't exist. Delete outright only after checking that nothing requires a docstring here: `pydocstyle`, `ruff` D-rules and `flake8-docstrings` all fail the build on a missing docstring for a public symbol, and `get_user` is public. See the Docstrings section of `core-patterns.md`, which governs.
 
 **Full Google/NumPy-style docstrings on private helpers.** Ceremony scaled to the wrong audience.
 
@@ -39,7 +39,7 @@ Duplicates the traceback and drops the type. Delete the wrapper unless it adds c
 
 **Bare `except:` or `except Exception:`** around a call with one realistic failure mode. Catches `KeyboardInterrupt` and typos alike.
 
-**`except ... : pass`.** **P1.** Silent failure.
+**`except ... : pass`.** Silent failure. **P1** when the caught type is bare or `Exception` — that swallows `KeyboardInterrupt`, `MemoryError` and every typo in the block. **P2** for a named exception (`except FileNotFoundError: pass`), which is `contextlib.suppress` written longhand and is often exactly what was meant. The scanner and SKILL.md both grade it this way.
 
 **Exception messages that restate the exception class.** `raise ValueError("Invalid value")`.
 

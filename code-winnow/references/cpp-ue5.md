@@ -24,7 +24,9 @@ Unreal supplies its own containers, strings, and smart pointers, and the codebas
 
 **Raw `UObject*` member without `UPROPERTY()`.** **P1.** The garbage collector doesn't see it, so the object gets collected out from under a live pointer. This is a real crash, not style.
 
-**`TSharedPtr` wrapping a `UObject`.** Two ownership systems fighting. UObjects are GC-managed; use `UPROPERTY()` or `TObjectPtr`.
+**`TSharedPtr` wrapping a `UObject`.** Two ownership systems fighting. UObjects are GC-managed; use `UPROPERTY()`, ideally `UPROPERTY()` with `TObjectPtr`.
+
+**`TObjectPtr` is not a substitute for `UPROPERTY()`.** It is a `UPROPERTY`-compatible wrapper adding access tracking and lazy load in editor builds — it does **not** root anything on its own. A bare `TObjectPtr<UFoo> Foo;` with no `UPROPERTY()` is exactly as invisible to the garbage collector as a raw `UFoo*`, and fails the same way: collected out from under a live pointer, at runtime, with a clean compile. The scanner only flags the raw-pointer form, so this one is yours to catch by reading.
 
 **Null checks after allocation that cannot fail.** `NewObject<T>()` and `CreateDefaultSubobject<T>()` don't return null on failure — they crash. A guard implies a recoverable case that doesn't exist.
 

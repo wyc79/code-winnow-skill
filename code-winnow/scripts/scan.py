@@ -66,6 +66,19 @@ MINIFIED_AVG_LINE = 500
 WARNINGS = []
 READ_ERRORS = []
 
+# {path: {line}} - positions in the NEW file where the diff REMOVED content.
+#
+# Scope was decided by "is this finding's line one the diff added", which
+# cannot see a change that only takes lines away. Delete a test's only
+# assertion and every line that remains is untouched, so the now-assertionless
+# test is filed pre-existing and dropped from the default run: the diff
+# created a P1 and the scanner reported nothing. That is the headline case
+# this skill exists for.
+#
+# Accumulated like WARNINGS rather than threaded through resolve_diff's six
+# return points. Safe because each scan is its own process.
+REMOVED_AT = defaultdict(set)
+
 
 def warn(msg):
     if msg not in WARNINGS:
@@ -223,6 +236,12 @@ def parse_diff(raw, into=None):
         elif line.startswith("\\"):  # "\ No newline at end of file"
             continue
         elif line.startswith("-"):
+            # A removed line has no number in the new file - it sat in a gap.
+            # `@@ -3 +2,0 @@` means "after new line 2", so record both sides
+            # of the gap and let a one-line overshoot stand: over-attributing
+            # shows the finding, under-attributing hides it. See REMOVED_AT.
+            REMOVED_AT[path].add(new_line)
+            REMOVED_AT[path].add(new_line + 1)
             continue
         else:
             new_line += 1
@@ -242,6 +261,25 @@ def untracked_files():
 def count_lines(rel):
     lines = read_lines(rel)
     return len(lines) if lines else 0
+
+
+def in_scope(added):
+    """Drop files with nothing in them, then add back the ones whose only
+    change was a deletion.
+
+    A scope map keyed on added lines cannot represent "this file only lost
+    lines", so a deletion-only change resolved to an empty scope and the
+    scanner printed 'No diff found' on a tree with real uncommitted work.
+    Under `--scope auto` it was worse than a miss: the empty result fell
+    through to the branch diff and reviewed something else entirely.
+
+    The value stays an empty set - no line was added, and `added_lines` should
+    say so. REMOVED_AT is what carries the change. See touches_change.
+    """
+    out = {p: v for p, v in added.items() if v}
+    for path in REMOVED_AT:
+        out.setdefault(path, set())
+    return out
 
 
 def resolve_diff(scope="auto", base=None):
@@ -294,20 +332,20 @@ def resolve_diff(scope="auto", base=None):
                 new_files.append(rel)
         if new_files:
             sources.append(f"{len(new_files)} untracked")
-        added = {p: v for p, v in added.items() if v}
+        added = in_scope(added)
         return added, sources
 
     if scope in ("auto", "worktree", "staged", "unstaged"):
         if scope == "staged":
             raw = _git(["diff", "--cached", "--unified=0",
                         "--diff-filter=d"]) or ""
-            added = {p: v for p, v in parse_diff(raw).items() if v}
+            added = in_scope(parse_diff(raw))
             if added:
                 return "staged changes (git diff --cached)", "staged", added
         elif scope == "unstaged":
             raw = _git(["diff", "--unified=0",
                         "--diff-filter=d"]) or ""
-            added = {p: v for p, v in parse_diff(raw).items() if v}
+            added = in_scope(parse_diff(raw))
             if added:
                 return "unstaged changes (git diff)", "uncommitted", added
         else:
@@ -321,7 +359,7 @@ def resolve_diff(scope="auto", base=None):
     ref = base or discover_base()
     if ref is None:
         warn("no base branch found (tried origin/HEAD, main, master, develop, "
-             "trunk) - pass --base <ref>")
+             "development, trunk) - pass --base <ref>")
         return None, None, {}
     if not ref_exists(ref):
         warn(f"base ref '{ref}' does not exist")
@@ -330,7 +368,7 @@ def resolve_diff(scope="auto", base=None):
     if raw is None:
         warn(f"could not diff against '{ref}' (no merge base?)")
         return None, None, {}
-    added = {p: v for p, v in parse_diff(raw).items() if v}
+    added = in_scope(parse_diff(raw))
     if not added:
         return None, None, {}
     return f"branch vs {ref}", ref, added
@@ -420,11 +458,33 @@ def words(text):
     return [w for w in found if w not in STOPWORDS]
 
 
-def add(findings, path, line, sev, rule, msg, anchor=""):
-    findings.append({
+def add(findings, path, line, sev, rule, msg, anchor="", span=None):
+    """`span` is the last line the finding is *about*, when that is a block
+    rather than a line - a test function, not the `def` naming it.
+
+    Scope attribution uses it. A finding anchored at `def test_x():` is about
+    the whole body, so a change inside that body is what caused it, even
+    though the anchor line itself is untouched. Omit it for line-scoped rules.
+    """
+    f = {
         "path": path, "line": line, "severity": sev, "rule": rule,
         "message": msg, "anchor": anchor,
-    })
+    }
+    if span and span > line:
+        f["span_end"] = span
+    findings.append(f)
+
+
+def touches_change(f, added, removed_at):
+    """Did this change cause this finding?
+
+    True when any line the finding covers was added, or when content was
+    removed from inside that span. `added` alone answers only the first, and
+    a deletion-only edit is the case that produced a silent zero.
+    """
+    lo = f["line"]
+    hi = f.get("span_end", lo)
+    return any(n in added or n in removed_at for n in range(lo, hi + 1))
 
 
 def anchor_of(lines, idx):
@@ -456,11 +516,40 @@ RE_SHEBANG = re.compile(r"^#!")
 RE_COMMENT = re.compile(
     r"^\s*(?://+|\#+|/\*+|\*(?!/)|<!--|--(?!-))\s*(.+?)\s*(?:\*/|-->)?\s*$")
 
+# Comments a tool reads. They carry no prose, restate nothing, and contain no
+# "because" - so every rule this scanner has for comments votes to delete
+# them, and deleting one breaks a build or silently changes behaviour.
+#
+# `//go:embed templates/*` above `var templates embed.FS` was reported as
+# "comment restates the line below it" and handed to the agent that owns
+# comments, whose only verdicts are DELETE, KEEP and TIGHTEN.
+RE_DIRECTIVE = re.compile(
+    r"^\s*(?:"
+    r"//\s*(?:go:\w+|nolint|NOLINT|NOSONAR|CHECKSTYLE|clang-format|"
+    r"IWYU\s+pragma|@ts-|@flow|eslint-|prettier-|jshint|globals?\b|"
+    r"Code\s+generated\b|Deprecated:|\+build)"
+    r"|/\*\s*(?:eslint|global|prettier-|#__PURE__|webpack)"
+    r"|#\s*(?:noqa|type:\s*(?:ignore|[A-Z])|pylint:|mypy:|ruff:|flake8:|"
+    r"fmt:\s*(?:on|off)|isort:|pragma:|shellcheck\b|hadolint\b|checkov:|"
+    r"tfsec:|nosec\b|yamllint\b|doctest:|typed:\s*\w+|coding[:=]|"
+    r"frozen_string_literal|syntax\s*=|yaml-language-server:)"
+    r"|<!--\s*(?:markdownlint|prettier-)"
+    r")", re.I)
+
+
+def is_directive(text):
+    """A compiler, linter, formatter or build directive wearing comment
+    syntax. Never prose, never a deletion candidate."""
+    return bool(RE_DIRECTIVE.match(text))
+
 
 def comment_body(text):
-    """The prose inside a comment, or None. Preprocessor directives are not
-    comments, however much `#include` looks like one to a regex."""
+    """The prose inside a comment, or None. Preprocessor directives and tool
+    directives are not comments, however much `#include` and `# noqa` look
+    like one to a regex."""
     if RE_PREPROCESSOR.match(text) or RE_SHEBANG.match(text):
+        return None
+    if is_directive(text):
         return None
     m = RE_COMMENT.match(text)
     if not m:
@@ -475,10 +564,24 @@ def comment_body(text):
 
 # Genuinely invisible - you cannot see these in review at all.
 UNICODE_INVISIBLE = {
-    "\u00a0": "non-breaking space", "\u200b": "zero-width space",
+    "\u00a0": "non-breaking space", "\u00ad": "soft hyphen",
+    "\u200b": "zero-width space",
     "\u200c": "zero-width non-joiner", "\u200d": "zero-width joiner",
     "\ufeff": "byte-order mark", "\u2060": "word joiner",
-    "\u202a": "bidi override", "\u202e": "bidi override",
+    # Trojan Source (CVE-2021-42574). Two of these nine were covered, which
+    # is worse than none: the advertised protection was "bidi", and the
+    # isolate family below is what the published proof of concept uses.
+    # U+202C is the terminator U+202E needs to be exploitable at all.
+    "\u202a": "bidi embedding (LRE)", "\u202b": "bidi embedding (RLE)",
+    "\u202c": "bidi terminator (PDF)",
+    "\u202d": "bidi override (LRO)", "\u202e": "bidi override (RLO)",
+    "\u2066": "bidi isolate (LRI)", "\u2067": "bidi isolate (RLI)",
+    "\u2068": "bidi isolate (FSI)", "\u2069": "bidi isolate (PDI)",
+    # Invisible characters that are legal in identifiers, so two distinct
+    # symbols can render identically.
+    "\u3164": "hangul filler", "\u115f": "hangul choseong filler",
+    "\u2061": "function application", "\u2062": "invisible times",
+    "\u2063": "invisible separator", "\u2064": "invisible plus",
 }
 # Visible, legitimate in prose, only a nuisance in code. P3, and not worth
 # mentioning at all inside a comment or a prose file.
@@ -565,7 +668,15 @@ def check_universal(path, lines, findings):
 
         for ch, name in UNICODE_INVISIBLE.items():
             if ch in text:
-                add(findings, path, idx, "P1", "unicode-invisible",
+                # A non-breaking space or soft hyphen in a Markdown file is
+                # routine - pasted text, an option-space, a table alignment -
+                # and it sorted to the top of "P1 - Risk (behavior, security,
+                # test integrity)". The bidi and invisible-identifier
+                # characters are a real attack in prose too, since a reader
+                # reviews the rendered form: those stay P1 everywhere.
+                soft = name in ("non-breaking space", "soft hyphen")
+                sev = "P3" if (is_prose and soft) else "P1"
+                add(findings, path, idx, sev, "unicode-invisible",
                     f"{name} in source - invisible in review, breaks grep",
                     anchor)
                 break
@@ -636,8 +747,13 @@ def check_python(path, lines, findings):
                 "f-string in logging call formats even when filtered out",
                 anchor)
         if RE_PY_TYPE_IGNORE.search(text):
+            # Say what the fix is, because the alternative reading - delete
+            # the comment - passes every check and fails the build under
+            # warn_unused_ignores, and this candidate is read by an agent
+            # whose verdicts are DELETE, KEEP and TIGHTEN.
             add(findings, path, idx, "P2", "type-ignore",
-                "silences the checker rather than fixing the type", anchor)
+                "silences the checker rather than fixing the type - fix the "
+                "annotation; do not delete the directive", anchor)
         if RE_PY_ANY.search(text):
             add(findings, path, idx, "P3", "any-hint",
                 "Any disables checking exactly where it would help", anchor)
@@ -972,15 +1088,20 @@ def check_python_tests(path, tree, lines, findings):
         asserts = [n for n in ast.walk(fn) if _is_assert_call(n)]
         anchor = anchor_of(lines, fn.lineno)
 
+        # span: these findings are about the whole test body, so an edit
+        # anywhere inside it - including one that only deletes - is what
+        # caused them.
+        body_end = getattr(fn, "end_lineno", None)
+
         if not asserts:
             add(findings, path, fn.lineno, "P1", "test-without-assertion",
                 f"'{fn.name}' asserts nothing - it only proves the code did "
-                "not raise", anchor)
+                "not raise", anchor, span=body_end)
         else:
             if all(_is_tautology(a) for a in asserts):
                 add(findings, path, fn.lineno, "P1", "tautological-test",
                     f"'{fn.name}' only makes assertions that cannot fail",
-                    anchor)
+                    anchor, span=body_end)
             elif any(_is_tautology(a) for a in asserts):
                 for a in asserts:
                     if _is_tautology(a):
@@ -992,7 +1113,8 @@ def check_python_tests(path, tree, lines, findings):
             if all(MOCK_ASSERT.match(_assert_name(a)) for a in asserts):
                 add(findings, path, fn.lineno, "P1", "mock-only-test",
                     f"'{fn.name}' asserts only that a mock was called - it "
-                    "tests the test double, not the code", anchor)
+                    "tests the test double, not the code", anchor,
+                    span=body_end)
 
         shape = _body_shape(fn)
         if shape:
@@ -1165,15 +1287,20 @@ def check_generic_tests(path, lines, findings):
         asserting = [t for t in (strip_code(x) for x in lines[i:end + 1])
                      if RE_ASSERTION.search(t)]
         mock_lines = [t for t in asserting if RE_MOCK_VERIFY.search(t)]
+        # span: the finding is about the block, not the declaration line, so
+        # a deletion inside the body is attributed to this change.
+        body_end = end + 1
+
         if not asserting:
             if RE_MOCK_VERIFY.search(body):
                 add(findings, path, i + 1, "P1", "mock-only-test",
                     "test verifies mock interactions but asserts nothing about "
-                    "the result - it tests the double, not the code", anchor)
+                    "the result - it tests the double, not the code", anchor,
+                    span=body_end)
             else:
                 add(findings, path, i + 1, "P1", "test-without-assertion",
                     "test body contains no assertion - it only proves the code "
-                    "did not throw", anchor)
+                    "did not throw", anchor, span=body_end)
         elif len(mock_lines) == len(asserting):
             # Verifying an interaction is the contract for a publisher, a
             # mailer, a logger. The scanner cannot tell those from mock
@@ -1181,7 +1308,7 @@ def check_generic_tests(path, lines, findings):
             add(findings, path, i + 1, "P2", "mock-only-test",
                 "every assertion here checks a mock rather than a result - "
                 "confirm the interaction IS the contract, otherwise assert on "
-                "the outcome too", anchor)
+                "the outcome too", anchor, span=body_end)
         else:
             for rx in RE_TAUTOLOGY:
                 m = rx.search(body)
@@ -1592,6 +1719,72 @@ RE_DECL_SKIP = re.compile(
 EXPOSED = re.compile(r"\b(public|protected|internal|UPROPERTY|UFUNCTION|"
                      r"SerializeField|Serializable|export)\b")
 
+def _exposed_above(lines, idx, lookback=12):
+    """Is there an exposing attribute in the block decorating this line?
+
+    Track bracket and paren balance rather than matching each line's shape,
+    for the reason `_has_uproperty_above` does the same: the verdict must not
+    depend on how the author wrapped their attributes. All four of these are
+    one serialized field to Unity, and every one of them must keep the P3
+    "confirm before removing" note:
+
+        [SerializeField]
+        [Tooltip("...")]                  stacked, one per line
+        private AnimationCurve curve;
+
+        [Tooltip("...")] [SerializeField] two groups on one line
+        private float damping;
+
+        [SerializeField,
+         Range(0f, 1f)]                   wrapped attribute list
+        private float speed;
+
+    A line-shape gate accepted only the first. The second was rejected as
+    "not an attribute line" while literally containing SerializeField, and
+    the wrapped form failed because its continuation line has no leading
+    bracket. Both fell back to P2 with no note - on the declarations this
+    must never advise deleting unchecked.
+
+    Walking upward while a bracket or paren group stays open keeps an
+    unrelated declaration two lines up from being read as decoration.
+    """
+    pending = 0          # unmatched closing brackets seen so far, walking up
+    for j in range(idx - 1, max(0, idx - 1 - lookback), -1):
+        raw = lines[j - 1].strip()
+        code = strip_code(lines[j - 1])
+        stripped = code.strip()
+
+        # A comment continues the decorating block without ending it. Test the
+        # RAW line: strip_code blanks `//` comments, so a `//` branch keyed on
+        # the stripped text can never fire - which silently dropped the
+        # confirm-before-removing note from every serialized field documented
+        # with `///`, the ordinary C# way to document one.
+        if raw.startswith(("//", "/*", "*")):
+            continue
+
+        if not stripped:
+            if pending:
+                continue
+            return False
+
+        closers = code.count("]") + code.count(")")
+        openers = code.count("[") + code.count("(")
+
+        # This line decorates the declaration if we are inside an unclosed
+        # group, if it opens one, or if it closes more than it opens - the
+        # last being a wrapped continuation like `  Range(0f, 1f)]`, which
+        # starts with no bracket at all and used to end the walk immediately.
+        if not (pending > 0 or stripped.startswith("[") or closers > openers):
+            return False                       # a declaration, not decoration
+
+        # Only search once we know this line is part of the block. Searching
+        # unconditionally made `public class W {` one line above a private
+        # field mark it exposed.
+        if EXPOSED.search(code):
+            return True
+        pending = max(0, pending + closers - openers)
+    return False
+
 
 def check_bindings(path, lines, findings, exposed_note):
     """Bindings declared and never referenced (fields or locals); locals that
@@ -1638,8 +1831,8 @@ def check_bindings(path, lines, findings, exposed_note):
         if m:
             name = m.group(1)
             if counts[name] == 1 and len(name) > 1:
-                prev = lines[idx - 2] if idx >= 2 else ""
-                is_exposed = bool(EXPOSED.search(text) or EXPOSED.search(prev))
+                is_exposed = bool(EXPOSED.search(text)
+                                  or _exposed_above(lines, idx))
                 add(findings, path, idx,
                     "P3" if is_exposed else "P2", "unused-binding",
                     f"'{name}' is declared and never referenced in this file"
@@ -1681,21 +1874,102 @@ def load_report(path, flag):
     return prior
 
 
+def number_occurrences(findings):
+    """Stamp each finding with its 1-based index among its same-key siblings,
+    counted in FILE ORDER.
+
+    `finding_key` excludes the line number on purpose, so N instances of one
+    constant-message rule in one file are indistinguishable by key alone. That
+    left `--declined` guessing which instance the user meant, and every guess
+    is wrong under a line shift: insert three lines above two instances and
+    "nearest recorded line" picks the other one.
+
+    **Sorting by line is what makes this correct, and it was not free.** The
+    Python rules emit through `ast.walk`, which is breadth-first, so findings
+    arrive in AST-depth order, not file order:
+
+        four handlers at lines 4, 9, 15, 19  ->  emitted 19, 4, 9, 15
+
+    Numbering them as they arrived gave occurrence 1 to the *last* one in the
+    file. Two consequences, both silent. `--declined` suppressed a finding the
+    user never saw while the one they declined kept returning. And SKILL.md
+    tells the executor to count anchor matches top-to-bottom, so the plan's
+    `occurrence:` and the executor's count referred to different things - the
+    document calls a fix applied to the wrong line the worst outcome available
+    in this skill, and this produced exactly that.
+
+    File order is also the only ordering a human or an executing agent can
+    reproduce by reading the file, which is the property the field needs.
+    """
+    by_key = defaultdict(list)
+    for f in findings:
+        by_key[finding_key(f)].append(f)
+    for group in by_key.values():
+        for n, f in enumerate(sorted(group, key=lambda x: x["line"]), 1):
+            f["occurrence"] = n
+
+
 def split_declined(findings, declined_path):
     """Move findings the user already rejected out of the live list.
 
     Without this a declined finding came back as `persisting` on every run.
     A punch list that keeps re-raising settled items trains the reader to
     skim, and then they skim past the P1 too.
+
+    Matching is per instance, and picks the instance by nearest line.
+
+    Two ways this went wrong before. `finding_key` deliberately excludes the
+    line number so a decline survives the shifts that deleting other findings
+    causes, and most rules emit a constant message - so N occurrences of one
+    rule in one file share a key. A set-membership test therefore declined all
+    N once the user declined any one of them, including occurrences written
+    *later*: decline a single `except Exception: pass` and every other one in
+    that file, forever after, silently never reaches the report.
+
+    Counting instances fixed that and introduced a quieter fault - the budget
+    was spent in file order, so declining the finding at line 9 silenced the
+    one at line 4 instead. The user's finding stayed live and a different live
+    P1 vanished from every report. `line` is excluded from the *key* but is
+    still the best available hint about *which* instance was meant, so use it
+    to choose among candidates that already matched on all four key fields.
+    Entries with no usable `line` fall back to file order.
     """
     prior = load_report(declined_path, "--declined")
     if prior is None:
         return findings, []
-    keys = {finding_key(f) for f in prior["findings"]
-            if isinstance(f, dict) and "path" in f and "rule" in f}
+
+    # Candidates live per key, in file order, so a decline can pick the
+    # instance the user meant rather than whichever came first.
+    by_key = defaultdict(list)
+    for i, f in enumerate(findings):
+        by_key[finding_key(f)].append(i)
+
+    taken = set()
+    for d in prior["findings"]:
+        if not (isinstance(d, dict) and "path" in d and "rule" in d):
+            continue
+        pool = [i for i in by_key[finding_key(d)] if i not in taken]
+        if not pool:
+            continue
+        occ = d.get("occurrence")
+        if isinstance(occ, int):
+            # Exact: same key, same position among its siblings. Survives any
+            # line shift, which is the whole reason `line` is not in the key.
+            exact = [i for i in pool if findings[i].get("occurrence") == occ]
+            if exact:
+                taken.add(exact[0])
+                continue
+        want = d.get("line")
+        if isinstance(want, int):
+            # Fallback for a declined.json written before occurrences existed.
+            # A guess, and it can pick the wrong sibling once lines have moved.
+            pool.sort(key=lambda i: (abs(findings[i]["line"] - want),
+                                     findings[i]["line"]))
+        taken.add(pool[0])
+
     live, declined = [], []
-    for f in findings:
-        if finding_key(f) in keys:
+    for i, f in enumerate(findings):
+        if i in taken:
             f["status"] = "declined"
             declined.append(f)
         else:
@@ -1893,7 +2167,9 @@ def main():
                 scanned_files += 1
         kept = []
         for f in findings:
-            f["preexisting"] = f["line"] not in added_map.get(f["path"], set())
+            f["preexisting"] = not touches_change(
+                f, added_map.get(f["path"], set()),
+                REMOVED_AT.get(f["path"], set()))
             if not f["preexisting"] or args.whole_files:
                 kept.append(f)
         findings = kept
@@ -1904,6 +2180,7 @@ def main():
     # reviewer to strike a live item off the list.
     generated = datetime.datetime.now()
     stem = args.stem or report_stem(target, generated)
+    number_occurrences(findings)
     declined = []
     if args.declined:
         findings, declined = split_declined(findings, args.declined)
