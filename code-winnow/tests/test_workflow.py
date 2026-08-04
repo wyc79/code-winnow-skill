@@ -315,25 +315,41 @@ def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path
     """`Backup:` once ended in a `(NOT YET MADE)` marker. Copied into $BACKUP
     it made a real directory of that name nested inside the intended one, the
     script printed its usual success count, the non-empty refusal never fired
-    because the intended path was still empty, and `Undo:` restored nothing."""
+    because the intended path was still empty, and `Undo:` restored nothing.
+
+    It asserts WHICH gate refused. backup.py now has two destination checks -
+    the parenthetical one and the sibling one - and a poisoned path trips
+    both, so `REFUSING:` alone stays green with the parenthetical check
+    deleted. The mutation harness caught exactly that. The same lesson as
+    test_step5a_refuses_the_notes_document_on_its_status_line: layered gates
+    are the right design, a test that cannot say which one fired is not.
+
+    A real $ROUND matters for the same reason. With it unset the block asks
+    backup.py for `/fixplan.md`, which does not exist, and the refusal is
+    "no fix plan" - a pass that proves nothing about the header at all.
+    """
     run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
     (repo / "src").mkdir(exist_ok=True)
     (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    stem = "currentmain_worktree_20260803-1200"
-    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
-        f"# Fix plan\n\nStatus:   APPROVED by the user on 2026-08-03\n\n"
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "fixplan.md").write_text(
+        "# Fix plan\n\nStatus:   APPROVED by the user on 2026-08-03\n\n"
         "## Code fixes — approved\n\n"
         "- [ ] P1 thing\n      file:     src/a.py\n"
         "      anchor:   x = 1\n      evidence: rewrite, nothing removed\n",
         encoding="utf-8")
     body = _find_block("scripts/backup.py")[2]
-    poisoned = f".code-winnow/{stem}.pre-fix/  (NOT YET MADE)"
-    # WINNOW too: the block now invokes scripts/backup.py by path, and this
-    # test deliberately runs without the env.sh that would otherwise supply it.
-    p = run_block(f'WINNOW={WINNOW!r}\nSTEM={stem}\nBACKUP={poisoned!r}\n' + body,
-                  str(repo))
+    poisoned = ".code-winnow/round-01/pre-fix/  (NOT YET MADE)"
+    # WINNOW too: the block invokes scripts/backup.py by path, and this test
+    # deliberately runs without the env.sh that would otherwise supply it.
+    p = run_block(f'WINNOW={WINNOW!r}\nROUND=.code-winnow/round-01\n'
+                  f'BACKUP={poisoned!r}\n' + body, str(repo))
     both = p.stdout + p.stderr
     assert "REFUSING:" in both, both
+    assert "parenthetical" in both, (
+        "refused, but not on the parenthetical gate - the header-paste check "
+        f"is no longer what stops this:\n{both}")
     assert not list((repo / ".code-winnow").glob("**/*NOT YET*")), \
         "a directory was created from the header's parenthetical"
 
