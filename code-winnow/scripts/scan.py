@@ -2669,6 +2669,13 @@ def main():
         return 0
 
     if args.meta:
+        # Relative to the git toplevel, never the cwd - every other path the
+        # scanner opens goes through abs_path for the same reason. Resolved
+        # against a subdirectory instead, the sibling scan finds no rounds at
+        # all, `prior_round` comes back null, and the report says "Previous
+        # run: none" for a repo that has one. Nothing about that is visible in
+        # the output.
+        round_dir = args.meta if os.path.isabs(args.meta) else abs_path(args.meta)
         generated = datetime.datetime.now()
         if args.paths:
             label, target = "named files", "files"
@@ -2680,7 +2687,7 @@ def main():
                 refused = bool(REFUSALS)
                 msg = (" ".join(REFUSALS) if refused else
                        "No diff found - cannot describe an empty scope.")
-                print(json.dumps({"round": round_number(args.meta),
+                print(json.dumps({"round": round_number(round_dir),
                                   "scope": None,
                                   "warnings": WARNINGS + [msg]}, indent=2))
                 return 2 if refused else 1
@@ -2688,7 +2695,7 @@ def main():
         if args.base:
             flag += f" --base {args.base}"
         stem = args.stem or report_stem(target, generated)
-        print(json.dumps(meta_document(args.meta, label, target, stem,
+        print(json.dumps(meta_document(round_dir, label, target, stem,
                                        generated, flag, args.feature),
                          indent=2))
         return 0

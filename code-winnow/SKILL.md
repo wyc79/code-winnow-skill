@@ -724,9 +724,20 @@ Copy those values out of `$ROUND/meta.json`; do not retype them from memory. Thi
 cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
 PRIOR=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prior_round"] or "")' \
         "$ROUND/meta.json")
-[ -n "$PRIOR" ] && "$PY" "$WINNOW/scripts/scan.py" $SCOPE \
-  --stem "$STEM-vs-$PRIOR" --json --since ".code-winnow/$PRIOR/scan.json" \
-  > "$ROUND/scan-vs-$PRIOR.json"
+
+# `if`, not `[ -n "$PRIOR" ] && …`. As the last command of the block that
+# short-circuits to exit 1 on the no-prior path — which is the FIRST RUN of
+# every repo, and which this document calls normal three paragraphs down. A
+# step that exits non-zero on its own documented happy path teaches whoever
+# runs it to ignore the exit code.
+if [ -n "$PRIOR" ]; then
+  "$PY" "$WINNOW/scripts/scan.py" $SCOPE \
+    --stem "$STEM-vs-$PRIOR" --json --since ".code-winnow/$PRIOR/scan.json" \
+    > "$ROUND/scan-vs-$PRIOR.json"
+  echo "reconciled against $PRIOR"
+else
+  echo "no prior round of this scope — the report says 'Previous run: none'"
+fi
 ```
 
 This used to be `ls -1t .code-winnow/round-*/*.json | grep -v -- '-postfix\|-p3\|-r2'` plus a line of prose telling you to eyeball the stem's scope segment. Both failed the same way: the exclusion list was a blocklist of ad-hoc suffixes that grew every time an agent invented one, and the scope check was advisory. **A branch baseline reconciled against a worktree re-scan reports every untouched finding as `resolved`**, which reads as "your fixes worked" for findings nobody touched.
@@ -773,7 +784,9 @@ If a P3-only list runs past a screen, cut it. Twenty cosmetic nits train the use
 
 ### The performance notes document
 
-Agent D's output goes to `$ROUND/notes.md` and nowhere else. It is not a section of the report, and **nothing in it enters the fix plan or is ever applied.** The shape and its three guards are in `report-format.md`.
+**D is dispatched like every other pass and writes its raw output to `$ROUND/agent-D.md`.** You then produce `$ROUND/notes.md` from it, exactly as you produce `report.md` from A, B, C and E. The shape and its three guards are in `report-format.md`.
+
+**`notes.md` is the only place D's findings are ever published**: not a section of the report, and **nothing in it enters the fix plan or is ever applied.** That is what "nowhere else" means — it constrains where the notes *go*, not whether D's raw output exists. Read the other way it made `agent-D.md` a file the skill forbids and the index template links, so the index carried a permanently dead link.
 
 **Write the document even when D found nothing** — an empty Notes section and a line saying the pass ran. A missing file is indistinguishable from a pass that was skipped, and those are different facts. When D was not dispatched at all, write no document and say so in the report header instead.
 
@@ -832,9 +845,11 @@ If the pre-existing list is longer than the in-scope list, say so in one line �
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
-sed "s|ROUND|$(basename "$ROUND")|g" "$WINNOW/scaffold/root/README.md" \
+sed "s|{{ROUND}}|$(basename "$ROUND")|g" "$WINNOW/scaffold/root/README.md" \
   > .code-winnow/README.md
 ```
+
+**The placeholder is `{{ROUND}}` and not `ROUND` because the substitution is global and `ROUND` is a real word.** The template's own prose documents `$ROUND` as an `env.sh` variable, and an unanchored `s|ROUND|round-06|g` rewrote it to `$round-06` — in the index of a real run. A placeholder has to be a token that cannot occur in the prose around it.
 
 That handles every path in one substitution. Fill the rest by hand, from what you already hold:
 

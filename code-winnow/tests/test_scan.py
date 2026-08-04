@@ -2447,3 +2447,24 @@ def test_meta_on_an_empty_scope_is_loud_and_nonzero(repo):
     data = json.loads(p.stdout)
     assert data["scope"] is None
     assert data["warnings"], "an empty scope must say why"
+
+
+def test_meta_round_dir_resolves_against_the_toplevel_not_the_cwd(repo):
+    """Every other path the scanner opens is joined onto the git toplevel.
+    Resolved against a subdirectory instead, the sibling scan finds no rounds,
+    `prior_round` comes back null, and the report says "Previous run: none" for
+    a repo that has one - with nothing in the output saying so."""
+    ws = repo / ".code-winnow"
+    (ws / "round-01").mkdir(parents=True)
+    (ws / "round-01" / "meta.json").write_text(json.dumps(
+        {"round": 1, "scope": "worktree", "generated": "2026-01-01T00:00:00"}),
+        encoding="utf-8")
+    (ws / "round-02").mkdir()
+    write(repo, "a.py", "x = 1\n")
+    sub = repo / "sub"
+    sub.mkdir()
+
+    meta = _meta(sub, ".code-winnow/round-02")
+    assert meta["round"] == 2, "round number lost when run from a subdirectory"
+    assert meta["prior_round"] == "round-01", \
+        "the sibling round was invisible from a subdirectory"

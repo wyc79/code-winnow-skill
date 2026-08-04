@@ -89,7 +89,7 @@ So outside the claimed three, note only what is language-independent — a neste
 
 ## Reporting
 
-Notes go to `.code-winnow/round-NN/notes.md`, never to the main report and never to the fix plan. The template is already in the round; fill it. Format, one entry per note:
+Agent D writes its raw output to `round-NN/agent-D.md`, like every other pass. The supervisor produces `round-NN/notes.md` from it — that is the only place D's findings are ever published, never the main report and never the fix plan. The `notes.md` template is already in the round; fill it. Format, one entry per note:
 
 ```
 - src/Grid.cs:22 — neighbour scan is O(n²)

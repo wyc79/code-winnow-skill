@@ -59,8 +59,8 @@ def test_root_index_uses_one_path_placeholder():
     hrefs = re.findall(r"\]\(([^)]+)\)", read(ROOT_README))
     assert hrefs, "the index template has no links"
     for href in hrefs:
-        assert href.startswith("ROUND/"), (
-            f"{href} does not start with the ROUND placeholder")
+        assert href.startswith("{{ROUND}}/"), (
+            f"{href} does not start with the placeholder")
 
 
 def test_root_index_has_a_row_for_every_pass():
@@ -68,7 +68,7 @@ def test_root_index_has_a_row_for_every_pass():
     for name in ("report.md", "fixplan.md", "notes.md", "agent-S.md",
                  "agent-A.md", "agent-B.md", "agent-C.md", "agent-D.md",
                  "agent-E.md"):
-        assert f"ROUND/{name}" in text, f"no index row for {name}"
+        assert "{{ROUND}}/" + name in text, f"no index row for {name}"
 
 
 def test_round_readme_is_static():
@@ -129,13 +129,13 @@ def test_every_relative_link_in_a_filled_index_resolves(tmp_path):
     ws = tmp_path / ".code-winnow"
     rd = ws / "round-02"
     rd.mkdir(parents=True)
-    for name in ("report.md", "fixplan.md", "notes.md",
-                 "agent-A.md", "agent-B.md", "agent-E.md"):
+    for name in ("report.md", "fixplan.md", "notes.md", "agent-A.md",
+                 "agent-B.md", "agent-D.md", "agent-E.md"):
         (rd / name).write_text("x\n", encoding="utf-8")
 
-    filled = read(ROOT_README).replace("ROUND", "round-02")
-    # S, C and D did not run: the row stays, the link goes.
-    for missing in ("agent-S.md", "agent-C.md", "agent-D.md"):
+    filled = read(ROOT_README).replace("{{ROUND}}", "round-02")
+    # S and C did not run: the row stays, the link goes.
+    for missing in ("agent-S.md", "agent-C.md"):
         filled = filled.replace(f"[{missing}](round-02/{missing})", missing)
     (ws / "README.md").write_text(filled, encoding="utf-8")
 
@@ -152,7 +152,7 @@ def test_a_filled_index_keeps_no_markers():
     """An empty cell says "not known". A surviving <fill says the agent stopped
     halfway. They are different facts and only one is acceptable."""
     filled = (read(ROOT_README)
-              .replace("ROUND", "round-02")
+              .replace("{{ROUND}}", "round-02")
               .replace("<fill: branch @ side vs base @ sha (scope), "
                        "YYYY-MM-DD HH:MM>", "main @ worktree, 2026-08-03 19:09")
               .replace("<fill: counts>", "")
@@ -160,4 +160,20 @@ def test_a_filled_index_keeps_no_markers():
     assert "<fill" not in filled, (
         "the marker strings in this test have drifted from the template - the "
         "template is canonical, so update the test")
-    assert "ROUND/" not in filled
+    assert "{{ROUND}}" not in filled
+
+
+def test_filling_the_index_leaves_prose_about_round_alone():
+    """The placeholder has to be a token that cannot occur in the prose it
+    sits in, and `ROUND` is a real word.
+
+    `sed "s|ROUND|round-06|g"` is global, so it also rewrote the template's own
+    line documenting `$ROUND` as an env.sh variable, producing `$round-06`.
+    That shipped in the index of a real run. The test that should have caught
+    it performed the same unanchored replace, so it reproduced the defect
+    instead - which is why this one asserts on the survivor, not the result."""
+    filled = read(ROOT_README).replace("{{ROUND}}", "round-06")
+    assert "`$ROUND`" in filled, (
+        "the env.sh variable reference was rewritten by the substitution - "
+        "the placeholder is not distinct from the prose around it")
+    assert "$round-06" not in filled

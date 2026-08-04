@@ -86,7 +86,7 @@ SPINE = [
     ("step2", "rm -f .code-winnow/env.sh"),
     ("step3", "Ask the scanner what it actually reviewed"),
     ("step4", "PRIOR=$("),
-    ("step4-index", 'sed "s|ROUND|'),
+    ("step4-index", 'sed "s|{{ROUND}}|'),
     ("step5a", "scripts/backup.py"),
     ("step6", '--since "$ROUND/scan.json" $DECLINED'),
 ]
@@ -913,29 +913,33 @@ def test_step4_index_substitutes_every_path_and_leaves_no_dead_link(repo):
     and by then the reader has stopped trusting the file.
 
     The regeneration is a full rewrite from the template, never an edit of the
-    live file - that is what removes half-updated state - and `ROUND` is the
-    only path placeholder, so the paths cannot be half-substituted either."""
+    live file - that is what removes half-updated state - and `{{ROUND}}` is
+    the only path placeholder, so the paths cannot be half-substituted
+    either."""
     rd = _bootstrap(repo)
     ws = repo / ".code-winnow"
     for name in ("report.md", "fixplan.md", "notes.md", "agent-A.md",
-                 "agent-B.md", "agent-E.md"):
+                 "agent-B.md", "agent-D.md", "agent-E.md"):
         (ws / rd / name).write_text("x\n", encoding="utf-8")
 
-    p = run_block(_find_block('sed "s|ROUND|')[2], str(repo))
+    p = run_block(_find_block('sed "s|{{ROUND}}|')[2], str(repo))
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
 
     index = (ws / "README.md").read_text(encoding="utf-8")
-    assert "ROUND/" not in index, "a path placeholder survived the rewrite"
+    assert "{{ROUND}}" not in index, "a path placeholder survived the rewrite"
     assert f"{rd}/report.md" in index
+    assert "`$ROUND`" in index, (
+        "the substitution rewrote the prose documenting the env.sh variable")
 
-    # Every link the block itself produced must resolve. The three passes that
-    # did not run still have rows; their links are dropped by hand at Step 4,
-    # which is prose, so this checks only what the substitution wrote.
+    # Every link the block itself produced must resolve. S and C did not run
+    # here; their links are dropped by hand at Step 4, which is prose, so this
+    # checks only what the substitution wrote. D is NOT exempt - it writes
+    # agent-D.md like every other pass, and notes.md is where its findings are
+    # published rather than a replacement for its raw output.
     dead = [h for h in re.findall(r"\]\(([^)]+)\)", index)
             if not h.startswith(("http://", "https://", "#"))
             and not (ws / h).exists()
-            and os.path.basename(h) not in
-            ("agent-S.md", "agent-C.md", "agent-D.md")]
+            and os.path.basename(h) not in ("agent-S.md", "agent-C.md")]
     assert not dead, f"dead links in the regenerated index: {dead}"
 
 
@@ -1043,3 +1047,27 @@ def test_skill_md_carries_no_lone_carriage_return():
         f"{lone} lone carriage return(s) in SKILL.md, on line(s) {where}. "
         "A backslash escape was interpreted somewhere it should have stayed "
         "literal - check any shell or Python one-liner that wrote this text.")
+
+
+@requires_bash
+def test_step4_reconciliation_succeeds_when_there_is_no_prior_round(repo):
+    """The first run of every repo takes this path, and SKILL.md calls it
+    normal - "Previous run: none".
+
+    Written as `[ -n "$PRIOR" ] && …` it was the block's last command, so the
+    empty case short-circuited and the block exited 1 with no output. A step
+    that fails on its own documented happy path teaches whoever runs it to stop
+    reading exit codes, which is the guard the whole four-field check rests on.
+    The paired test only ever built the case WITH a prior round."""
+    rd = _bootstrap(repo)
+    meta = json.loads((repo / ".code-winnow" / rd / "meta.json")
+                      .read_text(encoding="utf-8"))
+    assert meta["prior_round"] is None, "fixture no longer exercises no-prior"
+
+    p = run_block(_find_block("PRIOR=$(")[2], str(repo))
+    assert p.returncode == 0, (
+        f"the no-prior path must succeed:\n{p.stdout}{p.stderr}")
+    assert "Previous run: none" in p.stdout or "no prior round" in p.stdout, \
+        f"it should say what it did:\n{p.stdout}{p.stderr}"
+    assert not list((repo / ".code-winnow" / rd).glob("scan-vs-*.json")), \
+        "reconciled against nothing"

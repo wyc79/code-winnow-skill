@@ -144,8 +144,28 @@ do that. The root therefore holds one regenerated index and no aliases at all.
 
 **Why the index is rewritten in full rather than edited.** A surgical update needs a
 marker to find, and a half-updated index is worse than a stale one — it is stale in a
-way that looks current. `ROUND` is the only path placeholder, so the paths cannot be
+way that looks current. `{{ROUND}}` is the only path placeholder, so the paths cannot be
 half-substituted either.
+
+**Why the placeholder is `{{ROUND}}` and not `ROUND`.** The substitution is global and
+`ROUND` is an ordinary English word, so `s|ROUND|round-06|g` also rewrote the template's
+own line documenting `$ROUND` as an `env.sh` variable, into `$round-06`. That shipped in
+the index of a real run. A placeholder has to be a token that cannot occur in the prose
+around it — and the test that should have caught this performed the *same* unanchored
+replace, so it reproduced the defect rather than detecting it. The replacement test
+asserts on the survivor (`$ROUND` is still there) rather than on the result.
+
+**Why the reconciliation block uses `if` and not `&&`.** `[ -n "$PRIOR" ] && …` was the
+block's last command, so the no-prior path short-circuited and the block exited 1 — on
+the first run of every repo, which this document calls normal. A step that fails on its
+own documented happy path teaches whoever runs it to stop reading exit codes, and the
+four-field integrity check rests entirely on exit codes being meaningful.
+
+**Why `agent-D.md` exists.** Step 4 said D's output goes to `notes.md` "and nowhere
+else", while the index template shipped a live link to `agent-D.md` — so following the
+document made that link permanently dead. "Nowhere else" constrains where D's *findings*
+are published: not the report, not the fix plan. It was never about D's raw output, which
+is written and merged exactly like A's, B's, C's and E's.
 
 **Why `cp -n` is not used for the root scaffold.** Step 0 is idempotent and cold entry
 at Step 5 re-runs it, so an unconditional copy overwrites a populated index with a blank

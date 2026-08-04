@@ -7,7 +7,7 @@ One round of a code-winnow review. Everything about this round is here.
 | `meta.json` | Step 2, by `scan.py --meta` | what this round compared to what |
 | `report.md` | Step 4 | the merged findings — read this first |
 | `fixplan.md` | Step 4b | the approved edit list; the only thing Step 5 may act on |
-| `notes.md` | Step 4 | Agent D's performance notes. **Never applied** |
+| `notes.md` | Step 4 | Agent D's performance notes, merged from `agent-D.md`. **Never applied** |
 | `agent-S.md` … `agent-E.md` | Steps 1 and 3 | each pass's raw output, before merging |
 | `scan.json` | Step 2 | the pre-fix scanner baseline. Step 6 reconciles against it |
 | `scan-postfix.json` | Step 6 | the re-scan after the edits |
