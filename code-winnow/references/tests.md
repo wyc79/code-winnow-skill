@@ -41,7 +41,7 @@ Do not cut these to make the numbers look better:
 
 ## What a comment can and cannot excuse
 
-Test files attract intent comments — "intentional duplicate", "kept deliberately", "this fixture is test-only". Grade them exactly as `core-patterns.md` says: a checkable why protects, a bare claim does not. But test findings have one extra rule on top, and it does not bend.
+Test files attract intent comments — "intentional duplicate", "kept deliberately", "this fixture is test-only". Grade them exactly as `comment-evidence.md` says: a checkable why protects, a bare claim does not. But test findings have one extra rule on top, and it does not bend.
 
 **A comment can justify a test's existence. It can never justify its false coverage.**
 

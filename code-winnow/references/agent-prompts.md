@@ -83,9 +83,12 @@ Everything except comments and doc files. Runs always.
 > them.** When a comment next to one of your findings claims the code is intentional —
 > reserved, deliberate, needed by something you cannot see — do *not* dismiss your
 > finding on that basis and do *not* report the comment. Keep the finding and tag it
-> `comment-claim: "<the comment, verbatim>"`. A later step arbitrates. See "Comments as
-> evidence" in `$WINNOW/references/core-patterns.md` for what separates a claim you can
-> check from one you cannot.
+> `comment-claim: "<the comment, verbatim>"`. A later step arbitrates, and you do not
+> need its rules — only the distinction it grades on. **A checkable why** points at
+> something outside itself: a ticket or URL, a named consumer or mechanism ("the
+> serializer reads this", "set from the Inspector"), a concrete external constraint. **A
+> bare claim** asserts intent and stops: "reserved for future use", "kept for later",
+> "intentional" with no reason. Tag either one; never resolve either one yourself.
 > The reference files tell you to verify before deleting — trace every caller, grep for
 > an existing helper, check scenes and assets for a serialized field. **Do those
 > lookups.** They are searches and reads for evidence, they are not reviews: nothing you
@@ -145,7 +148,8 @@ Comments and docstrings, and only those. Runs always.
 > is whether the version explains the code below it or only records when someone touched
 > it.
 > **Docstrings need their own pass, and it is the highest-yield thing you will do.** Read
-> the Docstrings section of `$WINNOW/references/core-patterns.md` before starting it.
+> `$WINNOW/references/docstrings.md` before starting it — the whole file, which is the
+> standard for this half of your job.
 > Generated diffs carry a docstring per function whether or not there is anything to say,
 > and they are written to look thorough rather than to be read — so a file gains three
 > hundred lines and no information, and reviewers wave it through because rejecting a
@@ -166,9 +170,9 @@ Comments and docstrings, and only those. Runs always.
 > and Java tags can be build inputs, and none of that is visible in the comment text.
 > **And for ordinary comments in an unclaimed language, an unrecognised line is a KEEP,
 > not a DELETE.**
-> **Read the whole "Language traps that reverse the rule" section before touching any
-> docstring**, and do not work from this summary — it is a summary, and summaries lose
-> the exceptions that matter. In outline: Go doc comments are *supposed* to restate the
+> **Read the whole "Language traps that reverse the rule" section of `docstrings.md`
+> before touching any docstring**, and do not work from this summary — it is a summary,
+> and summaries lose the exceptions that matter. In outline: Go doc comments are *supposed* to restate the
 > identifier; Rust `///` fenced blocks compile and run as tests; C#, Java and Rust doc
 > tags can be build inputs under warnings-as-errors; UE5 `/** */` above `UPROPERTY` is
 > the designer-facing tooltip; **JSDoc `{type}` in a `checkJs` project is the only type
@@ -229,7 +233,8 @@ report. There is no reason to pay for a third agent on a diff that renames a loc
 > review.
 > **(2) A doc in the diff claims something the code does not do.** Doc files the diff
 > *does* touch get the full treatment, including the Documentation section of
-> `$WINNOW/references/core-patterns.md`. **This includes docstrings** — a docstring
+> `$WINNOW/references/core-patterns.md`. **This includes docstrings**, and
+> `$WINNOW/references/docstrings.md` is the file that describes their shapes — a docstring
 > describing behaviour the function no longer has, an `Args:` entry for a parameter that
 > was renamed or removed, a documented `Raises:` the body cannot reach, a `Returns:`
 > describing the old return shape. Another agent judges whether those docstrings are too

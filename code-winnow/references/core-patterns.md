@@ -4,6 +4,8 @@ Language-agnostic. Load this every run, then load the language-specific file.
 
 Each entry: the tell, why it costs something, and the test for whether it is actually slop in this case.
 
+**Two standards live next door rather than here, because this file is loaded by every judgment agent and those two are not.** `comment-evidence.md` grades a comment that claims the code below it is intentional — that is the orchestrator's Step 3.5, and an agent's whole job there is to tag the claim, not settle it. `docstrings.md` is Agent B's pass, and Agent C's for the truth branch. Both are summarized below at the depth their other readers need; neither summary is the standard.
+
 ## What this skill actually claims
 
 **Verified coverage is three languages: Python, Unity C#, and Unreal C++.** Each has a reference file next to this one, dedicated scanner rules, and tables here that were checked against its toolchain. Those are the languages to trust this skill in.
@@ -65,60 +67,14 @@ Two adjacent traps. A directive attached to a line you are deleting goes with it
 
 ## Comments as evidence
 
-Separate question from the one above. There, a comment is the thing being judged. Here it is *evidence about the code below it* — the author telling you a field with no reader is read somewhere you cannot see, or a duplicate test pins a specific bug.
+Separate question from the one above. There, a comment is the thing being judged. Here it is *evidence about the code below it* — the author telling you a field with no reader is read somewhere you cannot see, or a duplicate test pins a specific bug. Authority is graded, never granted by the presence of a claim: the question is never "does a comment claim intent", it is **"does the claim name something you can go and check"**.
 
-This matters because the obvious rule is wrong. "If a comment says the code is intentional, do not flag it" hands every generated line an opt-out, written by the same generator. `// Reserved for future implementation` above a field nothing sets is not a defense of speculative structure — it *is* speculative structure, with a second line of it stacked on top.
+- **A checkable why** points at something outside itself — a ticket or URL, a named consumer or mechanism ("the serializer reads this", "set from the Inspector"), a concrete external constraint, an invariant the code depends on. It earns a *lookup*, not a pass.
+- **A bare claim** asserts intent and stops — "reserved for future use", "kept for later", "intentional" with no reason. It earns no lookup, because there is nothing to look up.
 
-So authority is graded. The question is never "does a comment claim intent", it is **"does the claim name something you can go and check".**
+**If you are a judgment agent, that is all you need**: do not dismiss your finding on a comment's say-so and do not report the comment — tag it `comment-claim: "<verbatim>"` and hand it up.
 
-**A checkable why** — the comment points at something outside itself:
-
-- a ticket, issue, or PR reference, or a URL
-- a named consumer or mechanism: "the serializer reads this", "set from the Inspector", "Blueprint calls this", "mirrors the prod constructor"
-- a concrete external constraint: "UE 5.4 returns a zero vector on near-zero input"
-- an invariant the code below depends on
-
-**A bare claim** — asserts intent and stops:
-
-- "reserved for future use", "reserved for future implementation"
-- "kept for later", "will be used", "placeholder"
-- "intentional", "do not remove" — with no reason given
-
-*Test:* could a reader who distrusts the comment go and verify it? A checkable why gives them somewhere to go. A bare claim asks for faith.
-
-**Then go and check it.** A checkable why earns a lookup, not a pass. Grep for the serializer, search the scenes for the field, open the ticket if it is reachable. **Four outcomes, and the difference between the middle two is where this rule goes wrong:**
-
-- **Confirmed** — you found the thing. The comment protects the code. Dismiss the finding and quote the comment as the reason.
-- **Disproved** — you found positive evidence of the opposite: the named ticket exists and says something else, the named consumer exists and does not reference this. The finding stands, goes *up* a severity (P3→P2→P1; a P1 stays P1), and says the comment is false. A comment asserting something untrue is worse than no comment, because it stops every future reader from touching the line for a reason that does not exist.
-- **No evidence either way** — the grep returned nothing. **This is not disproof, and it must never be treated as disproof.** Keep the finding at its original severity, mark it `unverified`, and propose nothing.
-- **Unperformable** — no network for the ticket, no tooling for the asset. Same handling as no-evidence.
-
-**Absence of evidence is the normal result for truthful comments.** The consumers that are hard to grep are exactly the ones worth commenting about: Blueprints and scenes in binary assets, reflection, dependency injection, `getattr`, serializers, SQL views, wire protocols, `dlopen`. Reading "grep found nothing" as "the author lied" produces a confident P1 accusing a correct comment of being false, proposes the deletion, and the build stays green while the game breaks at runtime. Only positive disproof earns the upgrade.
-
-### The unverifiable claim is a question, not a pass
-
-There is an obvious way to game the rule above, and it costs eleven characters. Append `(see #4821)` to any comment and it becomes a "checkable why"; the runtime almost certainly cannot open the tracker, so the lookup is unperformable, and if unperformable meant "leave it alone" then any line could be immunised by a generated ticket reference. In a UE5 repo `// Set in Blueprint` is the same sticker with no ticket at all.
-
-So an unverifiable claim does not protect the code, does not silently preserve it, **and does not change its severity**. It converts the finding into a question the user answers — reported at *the severity it already carried*, tagged `author claim, unverified — confirm`, with the comment quoted and the specific lookup you could not perform named. That keeps it in front of the person who can settle it in two seconds, which neither dismissing nor deleting does.
-
-**Reporting it at P3 was the same exploit one rung down.** If an unverifiable comment demoted every finding it touched to cosmetic, then those eleven characters would move a P1 swallowed exception to the bottom of a list this skill elsewhere tells you to *cut* when it runs past a screen. The immunity would be rebuilt out of the triage rules seconds after the severity rule closed it, and it would look like diligence. Severity describes what the code does; a claim nobody could check is not evidence about that, in either direction.
-
-Two consequences worth stating plainly. Never propose a deletion on an unverified claim — you have no evidence. And never treat repeated unverifiable claims as a pattern of abuse; the author of a Unity project has every reason to write `// Set in the Inspector` on a field that genuinely is.
-
-A bare claim earns no lookup, because there is nothing to look up. The comment and the code are one decision: either the claim acquires a ticket, or both lines go. Never delete the code and keep the comment, or the reverse.
-
-### The bare-claim rule has one exception: the comment *is* the mechanism
-
-Some code exists only to be referenced from somewhere the compiler cannot see, and the idiomatic marker for it is exactly the phrasing this file calls a bare claim:
-
-```csharp
-// Intentional. Do not remove.
-private static NativeAudioCallback _callbackRef;
-```
-
-Delete that and the GC collects the marshalled delegate — an intermittent native crash, no compile error, no failing test. The same shape covers side-effect imports (`import readline`, `from . import signals`), `#[used]` statics, GC roots, `static_assert` anchors, and registration-by-construction.
-
-**Before merging any bare claim with its declaration, ask what deleting it would break at runtime rather than at compile time.** If the binding is a callback reference, a GC root, a side-effect import, or a registration anchor, it is load-bearing regardless of how thin the comment is, and the right output is the confirm-question above — at whatever severity the finding already carried, never demoted for being unverifiable — plus a suggested rewrite of the comment to say *why*, which is the actual defect.
+**The full standard is `comment-evidence.md`, next to this file** — the four lookup outcomes, why "no evidence" is not disproof, why an unverifiable claim keeps its severity, and the one exception where the comment *is* the mechanism. The orchestrator running Step 3.5 reads it; nobody else needs to.
 
 ## Error handling
 
@@ -222,106 +178,8 @@ Delete that and the GC collects the marshalled delegate — an intermittent nati
 
 ## Docstrings
 
-**Expect volume here.** Generators emit a docstring per function whether or not there is anything to say, and they are graded on looking thorough rather than on being read. A file can gain three hundred lines of docstring and no information. This is the highest-yield place in a generated diff and the one reviewers skim hardest, because rejecting a docstring feels like rejecting diligence.
+**Expect volume here.** Generators emit one per function whether or not there is anything to say, and they are graded on looking thorough rather than on being read. A file can gain three hundred lines of docstring and no information. This is the highest-yield place in a generated diff and the one reviewers skim hardest, because rejecting a docstring feels like rejecting diligence.
 
-**The verdict is usually TIGHTEN, not DELETE.** A docstring is not a line comment. Many repos require one on every public symbol, enforced by `pydocstyle`, `ruff` D-rules, Doxygen, or XML-doc warnings-as-errors, and deleting it breaks the build or the docs site. Check before proposing a deletion: does anything else in this repo's public API go undocumented? If not, the docstring stays and gets shorter. Delete only when the whole thing restates the signature *and* nothing requires it there.
+**The verdict is usually TIGHTEN, not DELETE.** Many repos require a docstring on every public symbol and enforce it — `pydocstyle`, `ruff` D-rules, Doxygen, XML-doc warnings-as-errors — so deleting one breaks the build. Delete only when the whole thing restates the signature *and* nothing requires it there.
 
-### Redundant sentences
-
-The generated shape is four restatements of one fact:
-
-```python
-def get_user(user_id: int) -> User | None:
-    """Get the user by id.
-
-    This function retrieves the user associated with the given user id.
-    It takes a user id and returns the corresponding user object.
-
-    Args:
-        user_id (int): The user id.
-
-    Returns:
-        User | None: The user object, or None.
-    """
-```
-
-The summary line is the only line carrying anything, and it barely does. The paragraph restates the summary. `Args` restates the parameter name and repeats the type already in the signature. `Returns` repeats the return annotation.
-
-*Test, sentence by sentence:* cover the signature and read only this sentence. Does it tell you something the signature does not? `user_id (int): The user id` fails. `user_id: must be a positive database id, not a session id` passes.
-
-*Test for the whole block:* would a reader who already read the signature learn anything? If not, one summary line is the entire correct docstring — and if that line only restates the function name, there is no correct docstring and the question becomes whether the repo requires one.
-
-### Convoluted sentences
-
-The register, not the content. Nominalization, passive voice, and a wind-up before the verb:
-
-| Convoluted | Direct |
-|---|---|
-| "This function is responsible for handling the calculation of the total" | "Returns the total" |
-| "Performs the initialization of the connection pool" | "Initializes the connection pool" |
-| "Utilized in order to facilitate the processing of incoming requests" | "Processes incoming requests" |
-| "It should be noted that this may potentially return None" | "Returns None when the cache is cold" |
-
-*Test:* find the verb. If the real action is trapped inside a noun ("handling the calculation of") or arrives after eight words of preamble, rewrite in the imperative or third person and cut the wind-up. Hedges — "may potentially", "it should be noted", "in some cases" — either name the case or come out.
-
-### What earns its place
-
-Keep, and never cut to make a docstring shorter:
-
-- **Units and ranges** — "timeout in milliseconds", "0.0 to 1.0 inclusive"
-- **Raises**, and the condition — "raises `KeyError` if the id was evicted"
-- **Side effects** — writes to disk, mutates the argument, blocks, starts a thread
-- **Invariants and ownership** — "caller owns the returned buffer", "not thread-safe"
-- **Non-obvious defaults**, and why they are what they are
-- Anything with a link or a ticket — you cannot see what is on the other end
-- A "because" clause **that carries a reason** — a constraint, a decision, a consequence. Not the word on its own: "because we need to count hits" over `counter++` is restatement wearing a conjunction, and generators emit it constantly because "explain why" is the standard instruction they are given. Test it by deleting the code: if the reason still tells you something, keep it
-
-### Every language has one — apply this to all of them
-
-"Docstring" here means the language's structured documentation comment, wherever it appears. The generator emits these in every language and the bloat is identical; only the syntax changes.
-
-| Language | Form | Redundant-restatement tell |
-|---|---|---|
-| Python | `"""..."""` | `Args:` repeating names and annotated types; `Returns:` repeating the return annotation |
-| C# | `/// <summary>`, `<param>`, `<returns>` | `<param name="userId">The user id.</param>` |
-| C++ / UE5 | `/** @brief @param @return */` | `@param Count The count.` |
-| Java | Javadoc `/** @param @return @throws */` | `@return the result` |
-| JS (JSDoc) | `/** @param {type} */` | `@param {string} name - The name.` — **but see below** |
-| TS (TSDoc) | `/** @param name - ... */`, no `{type}` | A `{type}` brace at all; the signature has it |
-| Go | `// Name does ...` above the declaration | A second sentence restating the first |
-| Rust | `///`, `//!` | `/// Returns the value.` above `fn value()` |
-| Ruby (YARD) | `# @param id [Integer]` | `# @param id [Integer] the id` |
-| Ruby (RDoc) | plain prose, `:call-seq:` | A paragraph restating the method name |
-| Swift | `///` markup, `- Parameter:` | `- Parameter name: The name.` |
-
-**The first three rows are the claimed ones**; the rest are here because the bloat is real in every language, not because this file has been checked against their toolchains. Outside Python, C# and C++, propose a rewrite only when you can **name the convention and the tool that enforces it** — or confirm nothing enforces one. If you cannot, report the count and the pattern and let the user decide.
-
-That is not excess caution, and the section immediately below is the argument for it: in Go the restatement is *mandatory*, in Rust the docstring may be a compiled test, in Java and C# it may be a build input. Every one of those inverts the rule in the table, and none of them is visible in the text of the comment. A rule that reverses depending on the toolchain is not one to apply from a table alone.
-
-### Language traps that reverse the rule
-
-These are the ones that turn a tidy-up into a broken build, and none of them are visible from the text of the comment.
-
-**Go doc comments are supposed to restate the name.** `// ParseConfig parses the config file.` looks like the textbook restatement and is the required convention — `revive`'s `exported` rule and `staticcheck` ST1020 both check it. (`golint` is often cited here and was archived in 2021; and both live rules are off in golangci-lint's default set, so the repo may not enforce it.) Convention holds regardless of tooling: in Go, cut the *second* sentence that repeats the first, never the first. Watch the blank line too — a TIGHTEN that leaves one between the comment and the declaration detaches the doc comment entirely.
-
-**Rust doc comments can run as tests.** A fenced code block inside `///` is compiled and executed by `cargo test` — **for library targets**. Doctests do not run in `bin` targets, and are disabled by `doctest = false` or by an `ignore` or `text` fence annotation. **`no_run` does not disable them**: the block is still compiled, only execution is skipped, so editing one can still break the build. `compile_fail` inverts the rule entirely — that block is *required* to fail compilation, and "fixing" the example is what breaks it. Treat any fenced block in a Rust doc comment as test code by default: the rules in `tests.md` apply, not these.
-
-Two more in the same family. A `# `-prefixed line inside a Rust doc fence is **hidden from the rendered docs but still compiled** — it looks exactly like commented-out code and deleting it breaks the doctest. And `#![doc = include_str!("../README.md")]` makes the README's fenced blocks into doctests, which is worth knowing because Agent C is the one agent allowed to edit untouched docs.
-
-The same executes-as-tests trap exists in Python under `--doctest-modules` and in any docstring containing `>>>`, where `# doctest: +SKIP` is load-bearing: delete it and the example runs and fails.
-
-**Rust also has the compile-check trap.** `#![deny(missing_docs)]` or `#![warn(missing_docs)]` with `-D warnings` makes a `///` on any `pub` item a build input. Deleting one fails the build, exactly as in C# and Java below.
-
-**Doc comments that compile-check.** C# `<param>` under CS1573/CS1591 with `GenerateDocumentationFile` and warnings-as-errors, and Java `@param` under `-Xdoclint`, are build inputs. Removing one entry from a documented method's parameter list fails the build. Verify the project's warning settings before proposing a deletion, or leave it and say why.
-
-**UE5 `/** */` above `UPROPERTY` or `UFUNCTION` is user-facing.** UnrealHeaderTool turns it into the `ToolTip` metadata a designer reads in the Details panel. That is shipped product text, not developer commentary — treat it like a localized string, tighten it only for the reader who will actually see it, and never delete it as ceremony.
-
-**Sometimes the docstring *is* the program.** `argparse.ArgumentParser(description=__doc__)`, `click` and `typer` help text, `docopt` — where the module docstring is the CLI grammar and editing it changes what the program accepts. Tightening any of these rewrites user-facing output or breaks parsing. Before touching a module-level docstring, grep for `__doc__`. This skill's own scanner is an instance: `scan.py` passes `description=__doc__` to argparse, so "cut the restated summary" would delete its `--help` body.
-
-**A C# `<inheritdoc/>` is not an empty docstring.** Deleting it removes the member's documentation entirely and can trip CS1591. Same shape: TSDoc `@internal` under `stripInternal` — remove it and an internal symbol is published into the emitted `.d.ts`.
-
-**In JSDoc, `{type}` is the type system — not a restatement of one.** The table above lists `@param {string} name` as the redundancy tell, and in TypeScript it is. In a `// @ts-check` file, a `checkJs: true` project, or anything using Closure Compiler, there is no signature to restate it *from*: the brace annotation is the only type information in the file. Cutting it as "redundant" deletes the types, and under `strict` it fails the build. Check for a `jsconfig.json`, `checkJs`, or a `// @ts-check` pragma before touching a brace annotation in a `.js` file. `@typedef`, `@template`, `@type` and `@satisfies` are pure declarations and are never redundant.
-
-### Reporting
-
-Report docstring concision as **one grouped finding per file** — a count, two exemplars, and the rewrite pattern. Not one finding per docstring. Forty P3 entries for forty functions is how a report stops being read, and the P1 three sections down goes with it. **P3** for convoluted or redundant docstring prose; a docstring that is factually *wrong* is a different finding and a P2.
+**The full standard is `docstrings.md`, next to this file**: the redundant and convoluted shapes, what earns its place, the per-language table, and the language traps that reverse the rule — Go *requires* the restatement, a Rust `///` fence can compile as a test, C# and Java tags can be build inputs, JSDoc `{type}` in a `checkJs` project is the only type information in the file, and sometimes the docstring *is* the program. None of that is visible from the text of the comment, which is why the rule is not applicable from a summary. Agent B reads it; Agent C reads it for the truth branch.

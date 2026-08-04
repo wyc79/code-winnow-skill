@@ -16,7 +16,7 @@ Generated code fails review in predictable ways. It is rarely wrong; it is bloat
 | Step | What it does | Writes |
 |---|---|---|
 | **0** | Git-excludes `.code-winnow/`, creates it, **verifies** | `.git/info/exclude` |
-| — | Read `core-patterns.md`; check companion skills | `.code-winnow/substitutions.md` |
+| — | Read `core-patterns.md` and `comment-evidence.md`; check companion skills | `.code-winnow/substitutions.md` |
 | **1** | Resolve the review scope; if a feature was named, dispatch **Agent S** and confirm the boundary with the user | — |
 | **2** | Deterministic scan; pin the stem; archive the previous run | `env.sh`, `<stem>.json`, `round-NN/` |
 | **3** | Build the review input, then dispatch **A B C D E** in parallel | `<stem>.input.diff` |
@@ -27,7 +27,7 @@ Generated code fails review in predictable ways. It is rarely wrong; it is bloat
 | **5b** | Apply the approved items, located by normalised anchor | the user's files |
 | **6** | Deletion-safety pass → test comparison → re-scan and reconcile | `<stem>-postfix.json`, `.tests-after.list` |
 
-Reference files, all under `$WINNOW/references/`: `core-patterns.md` (universal judgment standard, **read it yourself**), `agent-prompts.md` (the six dispatch prompts), `report-format.md` (every artifact's shape), `fragility.md`, `performance.md`, `tests.md`, `portability.md`, and one per claimed language — `python.md`, `csharp-unity.md`, `cpp-ue5.md`. `$WINNOW/scripts/scan.py` is the scanner; `$WINNOW/scripts/backup.py` is Step 5a. Maintainers editing the snippets in this file should read `DESIGN.md` in the repo root, which holds the near-miss rationale for every mechanical choice below.
+Reference files, all under `$WINNOW/references/`: `core-patterns.md` (universal judgment standard, **read it yourself**), `comment-evidence.md` (the X1 grading rule — **also yours**, and nobody else's), `docstrings.md` (Agent B's, and C's), `agent-prompts.md` (the six dispatch prompts), `report-format.md` (every artifact's shape), `fragility.md`, `performance.md`, `tests.md`, `portability.md`, and one per claimed language — `python.md`, `csharp-unity.md`, `cpp-ue5.md`. Each file names its own readers at the top; hand an agent what its prompt asks for and nothing else, since every extra file is paid five times over on a parallel run. `$WINNOW/scripts/scan.py` is the scanner; `$WINNOW/scripts/backup.py` is Step 5a. Maintainers editing the snippets in this file should read `DESIGN.md` in the repo root, which holds the near-miss rationale for every mechanical choice below.
 
 ## The scope rules
 
@@ -64,7 +64,9 @@ Both are courtesies with hard limits, not licence to widen. Everything else outs
 
 **Resolve `$WINNOW` before anything else.** It is the absolute path of this skill's directory — the one containing this file, `scripts/` and `references/`. Every scanner call and every reference path below is written against it, because a bare `references/…` or `scripts/scan.py` only resolves when the cwd is the skill folder, which is never where the repo is.
 
-**Then read `$WINNOW/references/core-patterns.md` yourself, before Step 3.** Not only the agents — *you*. Two steps are yours alone and neither can be executed from a pointer: Step 3.5 arbitrates comment evidence against the grading rule in that file, and Step 6's deletion-safety pass checks removals against its directive-comment table. On a parallel run you dispatch the judgment agents and would otherwise never open it, then make both judgments against a filename.
+**Then read `$WINNOW/references/core-patterns.md` and `$WINNOW/references/comment-evidence.md` yourself, before Step 3.** Not only the agents — *you*. Two steps are yours alone and neither can be executed from a pointer: Step 3.5 arbitrates comment evidence against the grading rule in `comment-evidence.md`, and Step 6's deletion-safety pass checks removals against `core-patterns.md`'s directive-comment table. On a parallel run you dispatch the judgment agents and would otherwise never open either, then make both judgments against a filename.
+
+`comment-evidence.md` is yours and only yours — the agents tag claims, you grade them — which is why it is a separate file rather than a section every agent would carry the cost of.
 
 **Run Step 0 next, before anything else that writes** — including the capability check below, which writes `.code-winnow/substitutions.md`. Writing that file before the exclusion lands is the exact self-dirtying Step 0 exists to prevent.
 
@@ -585,7 +587,7 @@ Findings outside the confirmed scope never enter this step. Scope appeals are no
 
 ### X1 — grading the claim
 
-The rule is in `$WINNOW/references/core-patterns.md` under "Comments as evidence", and the short version is that authority is earned, never granted by the presence of a claim.
+The rule is `$WINNOW/references/comment-evidence.md`, and the short version is that authority is earned, never granted by the presence of a claim.
 
 **A checkable why** — a ticket, a named consumer or mechanism, a concrete external constraint — **earns a lookup, not a pass.** Do the lookup:
 
@@ -789,7 +791,7 @@ The user edits the plan directly — delete an item to drop it. Write it whether
 - **`rewrite, nothing removed`** — for a tightened comment, a corrected doc line, an inserted header. Nothing is being taken away, so there is nothing to prove safe.
 - **`unverified — <the lookup you could not perform>`** — and then the item must not propose a deletion.
 
-**An `unverified` deletion is a rule violation upstream, and the executor refuses it.** `core-patterns.md` already says an unverifiable claim becomes a confirm-question — at its own severity — and never a proposed deletion, so such an item should not have reached the plan. If one does, skip it, and report it as *"approved but unverified — not applied"* rather than applying it or silently dropping it. Rewrites with `unverified` are fine; only removal needs proof.
+**An `unverified` deletion is a rule violation upstream, and the executor refuses it.** `comment-evidence.md` already says an unverifiable claim becomes a confirm-question — at its own severity — and never a proposed deletion, so such an item should not have reached the plan. If one does, skip it, and report it as *"approved but unverified — not applied"* rather than applying it or silently dropping it. Rewrites with `unverified` are fine; only removal needs proof.
 
 This is the whole correctness gate, and it is deliberately not a fourth reviewing agent. Another opinion does not make a lookup happen. A required field does.
 

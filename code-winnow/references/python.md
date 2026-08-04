@@ -19,7 +19,7 @@ def get_user(user_id: int) -> User:
         The user.
     """
 ```
-Four lines conveying nothing the signature didn't. **Tighten to the part that isn't obvious** — what happens when the user doesn't exist. Delete outright only after checking that nothing requires a docstring here: `pydocstyle`, `ruff` D-rules and `flake8-docstrings` all fail the build on a missing docstring for a public symbol, and `get_user` is public. See the Docstrings section of `core-patterns.md`, which governs.
+Four lines conveying nothing the signature didn't. **Tighten to the part that isn't obvious** — what happens when the user doesn't exist. Delete outright only after checking that nothing requires a docstring here: `pydocstyle`, `ruff` D-rules and `flake8-docstrings` all fail the build on a missing docstring for a public symbol, and `get_user` is public. See `docstrings.md`, which governs.
 
 **Full Google/NumPy-style docstrings on private helpers.** Ceremony scaled to the wrong audience.
 

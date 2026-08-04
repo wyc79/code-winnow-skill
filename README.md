@@ -73,6 +73,8 @@ code-winnow/
   scripts/backup.py        # Step 5a: the restore point, and six refusals
   references/
     core-patterns.md       # Universal judgment standard — read every run
+    comment-evidence.md    # The X1 grading rule — orchestrator only
+    docstrings.md          # Docstring concision — Agent B, and C for truth
     agent-prompts.md       # The six dispatch prompts (S, A, B, C, D, E)
     report-format.md       # Report, fix plan, notes and declined-file shapes
     fragility.md           # Agent E's gate
