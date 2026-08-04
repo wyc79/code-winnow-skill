@@ -65,7 +65,18 @@ Unreal supplies its own containers, strings, and smart pointers, and the codebas
 
 **`#pragma once` plus include guards.** Pick one; UE uses `#pragma once`.
 
-**Includes added but unused** after an agent's iteration loop.
+**Includes added but unused** after an agent's iteration loop. Real chaff, and the one import-shaped cleanup in this skill that is **reported freely and proposed only on evidence** — `include-what-you-use`, `clang-tidy misc-include-cleaner`, or a whole-file symbol trace, named in `evidence:`. Without one of those, write `fix: out of scope` and leave the line.
+
+That asymmetry is not fussiness about C++. Remove a `using` that C# needs and the build fails here, with a line number. Remove an `#include` that C++ needs and it very often still compiles here — another header pulled the symbol in transitively, or Unreal's unity build put a neighbour's includes in the same translation unit — and the failure surfaces on a different platform, a different compiler, or a colleague's incremental build that groups the blobs differently. A stale include costs build time; a wrong removal costs someone else a red build they cannot reproduce from the diff.
+
+Four that look unused and are not:
+
+- **`.generated.h`** — required last, referenced by name nowhere in the file. Never touch.
+- **`CoreMinimal.h`** — the module-wide convention, referenced directly by nothing.
+- **A macro's home.** `UE_LOG` needs `Logging/LogMacros.h`; `check()` and `ensure()` need `Misc/AssertionMacros.h`. Grep for the macro, not for a type.
+- **A template instantiation, an operator overload, or an explicit specialization** — consumed without any identifier from that header appearing on the line that consumes it.
+
+And `// IWYU pragma: keep` is a directive, not a comment: its presence settles the question. It is in the never-touch table in `core-patterns.md`.
 
 ## Naming
 

@@ -58,6 +58,8 @@ This is the deletion-safety list, pointed at the diff.
 
 **A reference that only reflection, DI, or an asset holds.** Renaming a class that a scene references by name, a handler resolved by string, an ORM mapping keyed on the attribute name, a Blueprint calling a `UFUNCTION`. The compiler is happy.
 
+**An import, `using` or `#include` removed as unused.** Agent A proposes these and you are the reader who knows which ones are load-bearing. Four shapes, every one of them clean-compiling on the machine that made the removal: a **side-effect import** (`import readline`, `from . import signals`, a codec or plugin registration) whose whole purpose is to run rather than to be referenced; a **C# `using` alias** (`using Debug = UnityEngine.Debug;`) whose removal lets a bare name resolve to a different type; a **`using` consumed only inside an inactive `#if`**, which breaks the build in a configuration nobody compiled here; and a **C++ `#include` that was supplying a symbol transitively**, which compiles on this machine and fails on a platform or a unity-build grouping invisible from the diff. The language files carry the full lists. Veto the deletion and name the mechanism — "this might be needed" is not one.
+
 **A directive comment added or removed.** See the table in `core-patterns.md`. E's angle is the *addition*: a newly-added `# noqa`, `# type: ignore`, `// NOLINT`, `@SuppressWarnings`, or `# nosec` in the diff is a suppression of something, and the something is usually the finding.
 
 **Type information carried in a comment.** A JSDoc `{type}` removed in a `checkJs` project, a `// @ts-check` pragma dropped, a `<param>` deleted under CS1573. `core-patterns.md` has the full set; E checks whether the diff did it.
@@ -131,7 +133,7 @@ A patch here would hand the user an all-clear they have not earned, which is a w
 
 ## E vetoes A's deletions
 
-Agent A proposes removing code. E is the reader who knows what removal breaks. When A proposes deleting a line E identifies as load-bearing — a GC root, a directive, a type carrier, a trust-boundary check, a registration anchor, a side-effect import — **E wins**, and Step 3.5 dismisses A's finding into "Deliberately left alone" with E's reason.
+Agent A proposes removing code. E is the reader who knows what removal breaks. When A proposes deleting a line E identifies as load-bearing — a GC root, a directive, a type carrier, a trust-boundary check, a registration anchor, a side-effect import, a `using` alias, an `#include` another header was relying on — **E wins**, and Step 3.5 dismisses A's finding into "Deliberately left alone" with E's reason.
 
 That is the real structural payoff of this agent. Step 6's deletion-safety pass catches the same mistakes *after* the edits land and reverts them. E catches them before the fix plan is written, so the bad deletion is never approved in the first place.
 
@@ -166,7 +168,7 @@ fix:      <the behaviour-preserving change, or "out of scope — <why>">
 
 Plus the standard `anchor:` / `occurrence:` / `of:` / `evidence:` fields **only on fix-plan-eligible findings**, on exactly the terms Agent A uses. A finding marked `fix: out of scope` needs none of them — the same logic as Agent B's KEEP verdicts, which need no anchor because nothing is going to be located.
 
-## Outside the three claimed languages
+## Outside the claimed languages
 
 `core-patterns.md`'s rule holds and bites harder here than anywhere. The lifecycle guarantees, the GC behaviour, the async model and the serialization rules are exactly what changes between ecosystems, and every entry above depends on one of them.
 

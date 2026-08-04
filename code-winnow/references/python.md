@@ -75,9 +75,26 @@ Duplicates the traceback and drops the type. Delete the wrapper unless it adds c
 
 **`await` in a loop** where `asyncio.gather` was intended — serial execution wearing async syntax.
 
+## Imports
+
+`ruff check --select F401` or `pyflakes` answers this in a second, and if the repo has either in its dev dependencies, run it — an eyeballed import list is a guess where a deterministic answer was available. The judgment is in the six places the tool is wrong, and most of them are cases F401 reports anyway because the marker that would have silenced it is missing.
+
+**A side-effect import.** `import readline`, `from . import signals`, `import myapp.plugins.legacy`, a codec registration, a matplotlib backend, a pytest plugin pulled in for its fixtures. The module is imported to *run*, not to be referenced, so the name never appears again by design. This is Agent E's veto and the only one here that costs a runtime break rather than a lint error. **A `# noqa: F401` on the line is the author saying exactly this** — it is a directive, it is in `core-patterns.md`'s never-touch table, and it settles the question.
+
+**A re-export in `__init__.py`.** `from .core import Session` at package top level is what lets callers write `from mypkg import Session`. Deleting it is an API break with a clean lint run afterwards. `__all__` membership is the same claim in another spelling — read `__all__` before touching any import in a package `__init__`.
+
+**A name used only inside a string annotation.** Under `from __future__ import annotations`, or in any file that quotes its annotations, `def f(s: "Session")` never mentions `Session` as a runtime name. The `if TYPE_CHECKING:` block above it has the same property, deliberately, and both are invisible to a text search for the identifier.
+
+**`import x.y` where only `x` is referenced.** Importing the submodule is what makes `x.y` resolvable. The line looks redundant next to `import x` and is not.
+
+**A name reached by a string.** `getattr(module, name)`, an entry point resolved by dotted path, a Django `signals` or `admin` import, a `conftest.py` fixture. The scanner's unused-binding rule already goes quiet in the presence of dynamic access, for this reason.
+
+**A doctest.** An import consumed only by `>>>` lines in a docstring is used every time the doctest runs and referenced nowhere a parser looks.
+
+Everything else is ordinary chaff at **P3**, and fix-eligible once the tool agrees and none of the above applies. That is the common case: an agent reached for `json`, changed approach, and left the line.
+
 ## Dead weight
 
-- Unused imports (an agent's iteration debris)
 - `if __name__ == "__main__":` demo block in a library module
 - `print()` left from debugging; entry/exit `logger.debug` narration
 - Commented-out alternative implementations

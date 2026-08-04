@@ -89,13 +89,19 @@ Everything except comments and doc files. Runs always.
 > Review this diff as if a stranger wrote it. Read `$WINNOW/references/core-patterns.md`,
 > plus the language file(s) matching the diff: `$WINNOW/references/csharp-unity.md`
 > (`.cs`), `$WINNOW/references/cpp-ue5.md` (`.cpp`/`.h`), `$WINNOW/references/python.md`
-> (`.py`). **If the diff touches any test file, read `$WINNOW/references/tests.md` too**
-> — in any language, including ones with no language file here.
-> **Those three languages are what this skill claims.** A file in any other language
+> (`.py`), `$WINNOW/references/web.md` (`.js`/`.jsx`/`.ts`/`.tsx`/`.mjs`/`.cjs`, `.html`,
+> `.css`/`.scss`/`.less`, and `.vue`/`.svelte`/`.astro`, which are all three at once).
+> **If the diff touches any test file, read `$WINNOW/references/tests.md` too** — in any
+> language, including ones with no language file here.
+> **Those six languages are what this skill claims.** A file in any other language
 > gets the universal rules and your ordinary judgment, and one extra rule that overrides
 > the rest: **when you cannot say what a line is for, keep it.** Read "What this skill
 > actually claims" in `core-patterns.md`. Not recognising something in a language nobody
 > here reviewed is not evidence it is chaff.
+> **On a web file the scanner is regex-level only** — no JavaScript parser exists here —
+> so it finds no unused bindings, no dead functions and no near-duplicate components in
+> `.ts` or `.js`. Its silence on those is not a clean result; that half of the pass is
+> yours by reading, and the report has to say so rather than implying the scan covered it.
 > For each scanner candidate: confirm or dismiss, with a reason. Then read the diff
 > yourself — the scanner catches maybe half of what matters, and the half it misses
 > (speculative abstraction, mock theatre, duplicated helpers) is the expensive half.
@@ -110,6 +116,22 @@ Everything except comments and doc files. Runs always.
 > serializer reads this", "set from the Inspector"), a concrete external constraint. **A
 > bare claim** asserts intent and stops: "reserved for future use", "kept for later",
 > "intentional" with no reason. Tag either one; never resolve either one yourself.
+> **Unused imports, `using` directives and `#include`s are yours, and they have their own
+> section in `core-patterns.md` — read it.** The scanner has no rule for them, deliberately,
+> so this class exists only if you look for it. Run the repo's tool if it has one
+> (`ruff check --select F401`, `pyflakes`, `dotnet format analyzers`, ESLint
+> `no-unused-vars`, `include-what-you-use`) and put what it said in `evidence:`; an
+> eyeballed import list is a guess where a deterministic answer was available. Then check
+> the traps in the language file, because the tool is wrong in a handful of specific ways
+> per language and those ways are the whole reason you are reading rather than it: a
+> side-effect import, a re-export in `__init__.py`, a name used only inside a string
+> annotation, a C# `using` alias, a `using` reached only under an inactive `#if`, a JS
+> `import './styles.css'`. **A `# noqa: F401` or `// IWYU pragma: keep` on the line settles
+> it** — that is a directive and no tool output outranks it. **C++ is not on the same
+> footing as the others:** report an unused `#include` freely, but propose removing it only
+> when `evidence:` names a tool you ran or a whole-file symbol trace, because a wrong
+> removal there still compiles on this machine and breaks on a platform you cannot see from
+> the diff. All of it is P3.
 > The reference files tell you to verify before deleting — trace every caller, grep for
 > an existing helper, check scenes and assets for a serialized field. **Do those
 > lookups.** They are searches and reads for evidence, they are not reviews: nothing you
@@ -184,13 +206,20 @@ Comments and docstrings, and only those. Runs always.
 > `"""..."""`, C# `/// <summary>`, Doxygen `/** @brief */`, Javadoc, JSDoc/TSDoc, Go doc
 > comments, Rust `///`, YARD, Swift markup. The bloat is identical across all of them;
 > only the syntax changes.
-> **Python, C# and C++ are the languages this skill claims.** In any other, propose a
-> rewrite only if you can name the convention and the tool that enforces it, or confirm
-> nothing does; otherwise report the count and the pattern and let the user decide. This
-> is not timidity — Go *requires* the restatement, Rust `///` can compile as a test, C#
-> and Java tags can be build inputs, and none of that is visible in the comment text.
+> **Python, C#, C++, JavaScript/TypeScript, HTML and CSS are the languages this skill
+> claims.** In any other, propose a rewrite only if you can name the convention and the
+> tool that enforces it, or confirm nothing does; otherwise report the count and the
+> pattern and let the user decide. This is not timidity — Go *requires* the restatement,
+> Rust `///` can compile as a test, C# and Java tags can be build inputs, and none of that
+> is visible in the comment text.
 > **And for ordinary comments in an unclaimed language, an unrecognised line is a KEEP,
 > not a DELETE.**
+> **If the diff touches HTML or CSS, read `$WINNOW/references/web.md` first** — three
+> things there are comments by syntax and code by function, and every comment rule you
+> have votes to delete them. Knockout's `<!-- ko -->` / `<!-- /ko -->` is control flow, and
+> deleting one half re-scopes the other. `/*! … */` in CSS is a minifier instruction
+> meaning *keep this*, and it is almost always a license header. `<!--[if lt IE 9]>` is a
+> conditional comment. None of them are yours.
 > **Read the whole "Language traps that reverse the rule" section of `docstrings.md`
 > before touching any docstring**, and do not work from this summary — it is a summary,
 > and summaries lose the exceptions that matter. In outline: Go doc comments are *supposed* to restate the
@@ -297,6 +326,26 @@ report. There is no reason to pay for a third agent on a diff that renames a loc
 > Step 4. And never propose touching a header on a file the diff did not add or modify:
 > fixing the repo's header consistency is not this review's job, and a diff that rewrites
 > 200 file headers is the most reviewer-hostile output this skill could produce.
+> **(4) Typography in the documentation prose this diff wrote.** Em dashes and en dashes on
+> lines the diff added or modified in a `.md`, `.rst`, `.txt` or `.adoc` file. This is the
+> one thing you report that is about style rather than truth, and it is here because it is
+> the strongest authorship tell there is: a reader who sees them concludes the document was
+> machine-written, whatever it says.
+> **Measure it against the repo, never against a rule.** Before reporting anything, sample
+> the repo's existing documentation on the base branch and count — the same lookup you do
+> for headers, uncapped, producing no finding of its own. If the repo's own docs use em
+> dashes, the new ones are house style: report **the count only, with no proposed rewrite**
+> — *"README.md gained 14 em dashes; the repo's other docs run about 9 per 100 lines —
+> matches convention."* If the repo's docs have none and this diff's do, that is the
+> finding, at **P3**, as **one grouped entry per file** with the count, two exemplars and
+> the replacement (`—` → ` - `, or a rewrite that needs no dash), never one finding per
+> dash. Forty P3 entries is how a report stops being read.
+> **Diff lines only, and this direction does not widen.** The untouched-doc exception above
+> is for a line the diff made *false*; it does not reach here, and a documentation file
+> this change did not touch is not yours to restyle however it reads. Do not extend this to
+> comments, docstrings, code, or user-facing strings — those belong to other agents, and
+> `core-patterns.md` says to leave typography alone in every one of them. Smart quotes are
+> not in scope either. Dashes, in docs, on diff lines.
 > Severity: **P2** for a stale doc line, and for a header that states something *wrong* —
 > the wrong license, another party's copyright. **P3** for a *missing* header, license
 > ones included, and for a divergent style or doc header. **P1** when a stale line is an
@@ -452,8 +501,9 @@ enough to add a swallowed exception.
 > **You outrank Agent A on deletions.** A proposes removing code; you are the reader who
 > knows what removal breaks. When you see a line that is load-bearing in a way the compiler
 > cannot see — a GC root, a directive comment, a type carrier, a trust-boundary check, a
-> registration anchor, a side-effect import — say so plainly and name the mechanism, whether
-> or not A flagged it. Step 3.5 gives you the deciding vote.
+> registration anchor, a side-effect import, a C# `using` alias, a `using` reached only
+> inside an inactive `#if`, an `#include` another header was relying on transitively — say
+> so plainly and name the mechanism, whether or not A flagged it. Step 3.5 gives you the deciding vote.
 > **Severity: P1** for silent corruption, silent data loss, a removed protection on a
 > reachable path, a committed credential, or any failure with no observable signal. **P2**
 > for fragility that surfaces loudly but that nothing tests, and for a newly-added

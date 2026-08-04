@@ -291,6 +291,63 @@ MUTATIONS = [
      'AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLQ"',
      'AWS_KEY = "AKIA' + 'IOSFODNN7EXAMPLQ"',
      "no_fixture_in_this_file"),
+
+    # The three web rules below are all the same shape of mistake: the obvious
+    # pattern is one token wider than the rule, and the extra width is live
+    # code. Each row widens it back and requires the quiet-side test to catch
+    # it, because a narrowing with no test is a narrowing the next reader
+    # simplifies away.
+
+    # `\bdebugger\b` reads like the whole rule and flags `debuggerEnabled` and
+    # `this.debugger.attach()` at P1.
+    ("js-debugger-anchoring", SCAN,
+     r'RE_JS_DEBUGGER = re.compile(r"(?:^|[;{])\s*debugger\s*(?=[;}]|\s*$)")',
+     r'RE_JS_DEBUGGER = re.compile(r"\bdebugger\b")',
+     "debugger_is_quiet_on_an_identifier"),
+
+    # Matching the attribute without the element flags `<div role="button">`,
+    # which is ARIA doing its job and the only thing naming that element.
+    ("html-role-element-gating", SCAN,
+     r'r"<button\b[^>]*\brole',
+     r'r"(?:)[^>]*\brole',
+     "redundant_role_is_quiet_on_a_div"),
+
+    # A "-webkit- is legacy" sweep proposes deleting -webkit-line-clamp and
+    # friends, and the page silently loses line clamping and momentum scroll.
+    ("css-prefix-named-list", SCAN,
+     r'r"(border-radius|box-shadow|box-sizing|opacity|border-image"',
+     r'r"([a-z-]+|border-image"',
+     "dead_prefix_is_quiet_on_prefixes_still_required"),
+
+    # `elif` here reviews a third of a single-file component and reports the
+    # other two thirds as clean.
+    ("web-dispatch-not-exclusive", SCAN,
+     "    if ext in HTML_EXT:\n        check_html(path, lines, findings)",
+     "    elif ext in HTML_EXT:\n        check_html(path, lines, findings)",
+     "single_file_component"),
+
+    # Ungated, Jasmine's `fit(` is a P1 on every `fit(chart, bounds)` in a
+    # layout module.
+    ("web-jasmine-test-gating", SCAN,
+     "or (is_test and RE_JS_TEST_ONLY_JASMINE.search(code))",
+     "or RE_JS_TEST_ONLY_JASMINE.search(code)",
+     "jasmine_is_quiet_outside_a_test_file"),
+
+    # The empty-rule pattern matches `methods: {}` and `function f() {}`
+    # exactly. Ungated by extension it reports live JavaScript in a .vue
+    # script block as an abandoned CSS rule.
+    ("web-empty-rule-scope", SCAN,
+     "        if pure_css and RE_CSS_EMPTY_RULE.match(text):",
+     "        if RE_CSS_EMPTY_RULE.match(text):",
+     "empty_rule_is_quiet_in_a_single_file_component"),
+
+    # Without the blanking pass, a commented-out block of old CSS is a page of
+    # findings - and it is the block most likely to contain dead prefixes,
+    # because that is why it was commented out.
+    ("web-comment-blanking", SCAN,
+     "    clean = _css_uncommented(lines)",
+     "    clean = lines",
+     "css_rules_are_quiet_inside_a_block_comment"),
 ]
 
 

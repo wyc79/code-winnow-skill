@@ -29,6 +29,8 @@ Test code gets a pass in review that production code does not, and generators ex
 
 **Skips with no reason.** `@pytest.mark.skip`, `@Ignore`, `it.skip`, `t.Skip()`, `#[ignore]` with no explanation. Nobody knows what has to be true to re-enable it, so nobody ever does. P3, but it is the kind that accumulates.
 
+**A focused test.** `describe.only`, `it.only`, `test.only`, `bench.only`, and Jasmine's `fdescribe`/`fit`. **P1**, and it is the inverse of the rule above rather than a variant of it: a skip disables one test loudly in the count, while `.only` disables *every other test in the file* and the run still passes. Nothing about the output says the suite shrank. The scanner files this as `js-test-only` for the JavaScript spellings; `pytest.mark.focus`, RSpec's `:focus` and NUnit's `[Explicit]` are the same defect in languages where you will have to spot it yourself.
+
 ## What is not redundant
 
 Do not cut these to make the numbers look better:

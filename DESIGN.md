@@ -478,6 +478,88 @@ file" is vacuous by construction there.
 **Why `complete: false` and exit 2 when every file in scope was skipped.** A scanner that
 says "0 candidates" because it could not open the files looks identical to a clean branch.
 
+## The web tier
+
+**Why one `web.md` and not three files.** A `.vue`, `.svelte` or `.astro` file is JavaScript,
+HTML and CSS at once, so a diff that touches one needs all three standards anyway. Three
+files would mean three reads for the common case and a dispatch rule to decide between
+them, to save nothing — every extra reference file is paid five times over on a parallel
+run, and this split would have added reads rather than removed them.
+
+**Why the three web extension sets overlap, and why the dispatch is `if` and not `elif`.**
+`MIXED_WEB_EXT` is in all three sets, and the three calls in `scan_file` are sequential
+`if`s. Written as an `elif` chain — which is how the Python/C#/C++ block above it is
+written, so it is the obvious thing to copy — a `.vue` file gets `check_js` and nothing
+else, and the HTML and CSS two thirds of the file report clean. `web-dispatch-not-exclusive`
+in `check_mutations.py` pins it. Running all three costs nothing because every web rule is
+anchored on syntax that occurs in only one of the three languages.
+
+**Why `check_bindings` is not called for web files.** It counts identifier tokens against
+C#/C++ declaration syntax. There is no parser here that can tell a JS binding from a
+property name, a destructure, or a JSX attribute, and a token-counting unused-binding rule
+over JavaScript produces confident nonsense.
+
+**Why the web scanner rules stop where they do.** The scanner is stdlib Python and `ast`
+reads Python, so there is no route to a JS parse tree — which is the difference between the
+two tiers and is stated in `core-patterns.md`, `SKILL.md` and the root `README.md` rather
+than left to be inferred. A silent scan over a `.ts` diff has not looked for unused
+bindings, dead functions or near-duplicate components, and the failure mode is that the
+report reads as though it had.
+
+**Why three of the web rules are narrower than the obvious pattern.** Each has a mutation
+row, because in all three cases the obvious pattern is one token wider than the rule and
+the extra width is live code:
+
+- `\bdebugger\b` flags `debuggerEnabled` and `this.debugger.attach()` at P1. The shipped
+  rule anchors on a statement position in front and a terminator behind.
+- Matching `role="button"` without the element flags `<div role="button">`, which is ARIA
+  doing its job and the only thing naming that element to a screen reader.
+- A "`-webkit-` is legacy" sweep flags `-webkit-line-clamp`, `-webkit-overflow-scrolling`,
+  `-webkit-appearance`, `-webkit-text-size-adjust`, `-webkit-box-orient` and
+  `-moz-osx-font-smoothing`, none of which have a working unprefixed form. The rule is a
+  named list of settled properties, and it has to stay one.
+
+**Why `console.error` and `console.warn` are absent from `js-console`.** Those are how a
+library reports a real problem. A rule that fires on them fires on correct code in every
+file that handles an error, and the standing position is that a noisy rule is worse than a
+missing one.
+
+## Imports, and dashes in documentation
+
+**Why unused imports are not a scanner rule.** Every claimed language already has a linter
+that finds them — `ruff F401`, IDE0005, ESLint `no-unused-vars`, IWYU — so a scanner rule
+would duplicate a tool the repo probably already runs. This skill opens by saying linters
+catch the subset that is a rule violation and the rest is judgment; the judgment here is
+knowing the handful of cases where the linter is *wrong*, which is what the language files
+now carry. A rule that agreed with `ruff` would add noise and no coverage.
+
+**Why C++ `#include` removals need tool evidence and the other languages do not.** The
+signal, not the difficulty. A wrong `using` removal in C# fails the build here, now, with a
+line number. A wrong `#include` removal very often still compiles here — another header
+supplied the symbol transitively, or a unity build grouped a neighbour's includes into the
+same translation unit — and fails on a platform, compiler or incremental build the author
+cannot see from the diff. A stale include costs build time; a wrong removal costs someone
+else a red build they cannot reproduce.
+
+**Why an import the diff made dead is a courtesy note and not a fix.** It sits on a line the
+change did not touch, so reporting it as a fix would need a third documented exception to
+the scope rule, and "two exceptions, and only two" is a line worth keeping. It goes in
+Pre-existing with the diff line that removed the last use cited, which tells the user
+everything without widening the rule.
+
+**Why dashes in documentation are Agent C's and not a scanner rule.** The question is not
+"is there an em dash" — that is trivially matchable — but "does this document read
+differently from the rest of the repo's documentation". Answering it needs a sample of the
+base branch, which the scanner does not read. A scanner rule could only fire unconditionally,
+and in a repo whose docs already use em dashes (this one does) that is a page of findings
+about house style.
+
+**Why the existing `unicode-typographic` rule still exempts prose files.** It is a different
+rule answering a different question. That one is about a grep that does not match, which in
+prose is not a cost. The new check is about authorship, which in code is not a cost. Same
+characters, opposite files, and merging them would have produced a rule that is wrong in
+both places.
+
 ## The test harness
 
 **Why `test_workflow.py` extracts snippets rather than copying them.** A copy agrees with

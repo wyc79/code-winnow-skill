@@ -79,9 +79,11 @@ This is D's analogue of Agent A's `evidence:` field, and it exists for the same 
 
 `measured: no` is not a defect in the note. It is the expected value, and it is exactly why these are notes.
 
-## Outside the three claimed languages
+## Outside the claimed languages
 
-`core-patterns.md` states the rule this file inherits: **verified coverage is Python, Unity C#, and Unreal C++.** Performance intuitions travel worse across languages than comment rules do, because the cost model is the thing that changes.
+`core-patterns.md` states the rule this file inherits: **verified coverage is Python, Unity C#, Unreal C++, and the web tier — JavaScript/TypeScript, HTML and CSS.** Performance intuitions travel worse across languages than comment rules do, because the cost model is the thing that changes.
+
+On the web tier the frequency gate is where it always is, and the entry points that satisfy it are `requestAnimationFrame`, a scroll or resize or pointermove handler, a React render body or a `useEffect` with no dependency array, an observer callback, and a per-item loop inside any of those. A style object rebuilt per render, a `querySelector` inside a rAF loop, a layout read (`offsetWidth`, `getBoundingClientRect`) interleaved with a write in the same frame — those pass the gate and can be named. "This re-renders too much" without an entry point does not, and it is Agent A's.
 
 Concretely: a list comprehension is faster than a loop in Python and the equivalent LINQ is slower in C#; string concatenation in a loop is quadratic in most languages and optimized away by the JIT in some; a virtual call is free in one runtime and a cache miss in another; V8, PyPy and HotSpot each eliminate allocations that look expensive in source.
 

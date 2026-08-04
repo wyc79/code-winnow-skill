@@ -8,13 +8,19 @@ Each entry: the tell, why it costs something, and the test for whether it is act
 
 ## What this skill actually claims
 
-**Verified coverage is three languages: Python, Unity C#, and Unreal C++.** Each has a reference file next to this one, dedicated scanner rules, and tables here that were checked against its toolchain. Those are the languages to trust this skill in.
+**Verified coverage is six languages in two tiers, and what separates the tiers is what the scanner can parse.**
+
+**Full tier — Python, Unity C#, Unreal C++.** A reference file each, scanner rules that read structure (Python through `ast`; C# and C++ through range-aware matching), and tables here checked against each toolchain.
+
+**Web tier — JavaScript/TypeScript, HTML, CSS.** One reference file, `web.md`, and scanner rules that are **regex-level only**. There is no JavaScript parser here and there will not be one: the scanner is stdlib Python, and `ast` reads Python. The judgment standard in `web.md` is as thorough as the other three files; the deterministic layer beneath it is not. **In practice that means the scanner will not tell you a `.ts` binding is unused, that two components are near-duplicates, or that a function is dead** — a silent scan over a TypeScript diff did not look for those, and a report must not present it as though it did. That work is Agent A's, by reading.
+
+Those six are the languages to trust this skill in, with that caveat attached to the last three.
 
 Everything else gets the universal pass — comments, typography, invisible characters, generic test smells — plus these tables **on a best-effort basis**, which is a weaker claim than it appears. An incomplete directive list is indistinguishable from a complete one at the moment you are about to delete a line that is not on it, and the list below is demonstrably incomplete: `// ktlint-disable` and `// swiftlint:disable` are real suppressions in real repos, and neither the table nor the scanner's directive pattern recognises either.
 
-**So outside those three languages, an unrecognised comment defaults to KEEP.** Not being able to say what a comment is *for*, in a language this skill does not claim, is not evidence that it is chaff — it is evidence that you are the wrong reader. Report it as a confirm-question naming the language, or say nothing at all. Keeping a redundant comment in a Kotlin file costs one line. Deleting `// ktlint-disable` because it was not in a table costs a broken build that no test catches, in a language nobody here can review the fix for.
+**So outside those six languages, an unrecognised comment defaults to KEEP.** Not being able to say what a comment is *for*, in a language this skill does not claim, is not evidence that it is chaff — it is evidence that you are the wrong reader. Report it as a confirm-question naming the language, or say nothing at all. Keeping a redundant comment in a Kotlin file costs one line. Deleting `// ktlint-disable` because it was not in a table costs a broken build that no test catches, in a language nobody here can review the fix for.
 
-This is a floor, not a ceiling: a clear-cut restated comment in Go is still a clear-cut restated comment. The rule bites where confidence is low, which outside the three claimed languages is more often than it feels.
+This is a floor, not a ceiling: a clear-cut restated comment in Go is still a clear-cut restated comment. The rule bites where confidence is low, which outside the claimed languages is more often than it feels.
 
 **Run the tests — they need the repo, and that is allowed.** "Trace every caller", "grep for the function's core operation", "check scenes and assets": these are searches for evidence, and they are the only thing standing between a confident deletion and a broken build. They do not conflict with the scope rules, which govern what becomes a *finding*, not what you may look at. Nothing you see outside the diff is reportable, however bad it is. If a lookup is impossible in this runtime, say "unverified", **keep the finding at its original severity**, move it to the report's "Author claims - confirm" section, and do not propose the deletion. Do not demote it: a P3 labelled "Cosmetic" is cut when the list runs long, so demoting on an unverifiable claim lets eleven characters of `(see #4821)` retire a real P1.
 
@@ -113,8 +119,30 @@ Separate question from the one above. There, a comment is the thing being judged
 - Placeholder `TODO` / `FIXME` with no ticket reference and no owner (test-file TODOs are normal — leave them)
 - `if __name__ == "__main__"` demo blocks, `main()` example harnesses, sample data left in production files
 - Commented-out code
-- Unused imports, unreferenced private helpers, variables assigned and never read
+- Unreferenced private helpers, variables assigned and never read
+- Unused imports, `using` directives and `#include`s — the section below, because "unused" is a claim there rather than an observation
 - Entry/exit logging (`log.debug("entering foo")`) left from an agent's debugging pass
+
+## Unused imports, `using` directives and `#include`s
+
+The purest form of an agent's iteration debris: it reached for a library, changed approach, and left the line at the top of the file. Every claimed language has a tool that finds these in a second, so the detection is free. **What this skill adds is knowing when the tool is wrong** — and it is wrong in different ways in each language, which is why the ladder below is not uniform.
+
+**"Unused" is a claim, not an observation.** An import is used when *something* consumes it, and in every language here at least one consumer is invisible to a search for the name: an import evaluated for its side effects, a `using` that decides which of two `Debug` classes a bare name resolves to, an `#include` another translation unit was relying on transitively. The name not appearing below is where this check starts, never where it ends.
+
+| | Find it with | Propose the removal when | Severity |
+|---|---|---|---|
+| **Python** | `ruff check --select F401`, `pyflakes` | The tool flags it and no trap in `python.md` applies | P3 |
+| **C#** | `dotnet format analyzers`, IDE0005 | Same, and it is not an alias and not reached under an inactive `#if` — `csharp-unity.md` | P3 |
+| **C++** | `include-what-you-use`, `clang-tidy misc-include-cleaner` | **Only with that tool's output, or a whole-file symbol trace, named in `evidence:`** — `cpp-ue5.md` | P3 |
+| **JS/TS** | ESLint `no-unused-vars`, `tsc --noUnusedLocals`, `knip` | The tool flags it and no trap in `web.md` applies. **A clean run says nothing about `import './x'`** — no binding, so no unused variable | P3 |
+
+**Run the tool if the repo has one.** This is one of the few places in this skill where a deterministic answer is available for the asking, and eyeballing an import list with `ruff` sitting in the repo's dev dependencies is guessing on purpose. Where no tool is available, write `unverified` in `evidence:`, keep the finding at P3, and propose nothing — the same rule as every other unverifiable claim.
+
+**C++ carries a bar the other three do not, and the reason is the signal rather than the difficulty.** Remove a `using` that C# needs and the build fails here, now, with a line number. Remove an `#include` that C++ needs and the file very often still compiles here — another header pulled the symbol in transitively, or a unity build put a neighbour's includes in the same translation unit — and the break lands on a different platform, a different compiler, or a colleague's incremental build. A stale include costs build time. A wrong removal costs someone else a red build they cannot reproduce from the diff. Those are not the same wager.
+
+**A directive on the line settles it.** `# noqa: F401`, `// IWYU pragma: keep`, `# pylint: disable=unused-import` — these are the author saying "I know, it is deliberate", they are in the never-touch table above, and no tool output outranks them.
+
+**Scope binds here exactly as it does everywhere.** The common case is an import the diff itself *added* and never used, and that line is in the diff. An import the diff made dead by deleting its last call site is on a line the change did not touch, so it is a courtesy note under Pre-existing — cite the diff line that removed the last use — and not a fix. Never batch: deleting eleven imports from a file whose change was two lines is formatting churn wearing a cleanup's clothes.
 
 ## Naming
 
@@ -143,7 +171,9 @@ Separate question from the one above. There, a comment is the thing being judged
 
 **Invisible characters.** **P1.** Non-breaking spaces, zero-width spaces and joiners, word joiners, bidi overrides. You cannot see them in review at all, they break greps and diffs, and they occasionally break parsers. A byte-order mark at the very start of a file is not one of these — Visual Studio and MSBuild write it into every `.cs` file they touch. The scanner demotes inside a test or prose file, where these are usually fixtures: a non-breaking space or soft hyphen drops to P3, and every other invisible character in a test file to P2. **In real source they are all P1**, bidi included — that is the Trojan Source class, and a reviewer reads the rendered form.
 
-**Typographic characters — em dashes, en dashes, smart quotes — in code.** **P3, not P1.** They are visible, and they only cost you a grep that does not match. Delete them in identifiers and in code you expect to search. **Leave them in comments, docstrings, prose files, and user-facing copy** — localized `FText`/`LocalizedString` strings are supposed to use real typography, and "fix" that and you have degraded the product to satisfy a linter. The scanner agrees: P3, and it exempts whole-line comments, Python triple-quoted regions and prose files. It does **not** exempt a comment sharing a line with code, nor string literals - so check trailing comments and localized strings yourself before accepting one.
+**Typographic characters — em dashes, en dashes, smart quotes — in code.** **P3, not P1.** They are visible, and they only cost you a grep that does not match. Delete them in identifiers and in code you expect to search. **Leave them in comments, docstrings, and user-facing copy** — localized `FText`/`LocalizedString` strings are supposed to use real typography, and "fix" that and you have degraded the product to satisfy a linter. The scanner agrees: P3, and it exempts whole-line comments, Python triple-quoted regions and prose files. It does **not** exempt a comment sharing a line with code, nor string literals - so check trailing comments and localized strings yourself before accepting one.
+
+**The same characters in a documentation file are a different question, and it is not this one.** In a README an em dash costs no grep and breaks nothing. What it does is read as machine-written, and that is the thing this skill was pointed at. So documentation prose gets its own check on its own terms: **Agent C owns it, it is measured against the repo's own docs rather than against a rule, and it stays at P3.** A repo whose documentation is already full of em dashes is not producing findings when a new doc has them — it is producing a house style, and C reports the count and moves on. The scanner is deliberately not involved: the comparison this needs is a sample of the base branch, and the scanner does not read the base branch. C's fourth direction in `agent-prompts.md` is the standard; nobody else reports on dashes in prose, and the rule above still holds everywhere that is not a `.md`, `.rst`, `.txt` or `.adoc` file.
 
 **Absolute paths into a developer home directory** (`/Users/name/…`, `C:\Users\name\…`) committed in config or test fixtures. **P1.** A `/home/name/…` path is a P2 — half the containers alive use one as a deployment path. Either one drops a step inside a path-handling test or a documentation file, where it is data or an example rather than a leak.
 

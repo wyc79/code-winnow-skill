@@ -35,6 +35,15 @@ CS_EXT = {".cs"}
 CPP_EXT = {".cpp", ".h", ".hpp", ".cc", ".inl"}
 PROSE_EXT = {".md", ".txt", ".rst", ".adoc"}
 
+# The web tier. `.vue`, `.svelte` and `.astro` are in all three sets because a
+# single-file component IS all three, and every web rule is anchored on syntax
+# that only occurs in its own language - so running the CSS pass over a
+# component file costs nothing and finds the `<style>` block.
+MIXED_WEB_EXT = {".vue", ".svelte", ".astro"}
+JS_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"} | MIXED_WEB_EXT
+HTML_EXT = {".html", ".htm"} | MIXED_WEB_EXT
+CSS_EXT = {".css", ".scss", ".sass", ".less"} | MIXED_WEB_EXT
+
 TEST_HINT = re.compile(
     r"(^|[/\\_.])(tests?|specs?|fixtures?|testing|e2e|cypress|__tests__|"
     r"unittests?)([/\\_.]|$)"
@@ -2275,6 +2284,210 @@ def interpolation_holes(text):
     return names
 
 
+# --------------------------------------------------------------------------
+# web rules - JavaScript/TypeScript, HTML, CSS
+#
+# Regex level, and that is a ceiling rather than a stage: this scanner is
+# stdlib Python and `ast` reads Python. So every rule below is anchored on a
+# token that means one thing wherever it appears, and the structural half of
+# the web pass - unused bindings, dead functions, near-duplicate components -
+# is Agent A's by reading. `references/web.md` and `core-patterns.md` both say
+# so; a quiet scan over a .ts diff is not coverage of those.
+# --------------------------------------------------------------------------
+
+# The statement, not the word. `debugger` is a common identifier fragment
+# (`debuggerEnabled`, `this.debugger.attach()`, `isDebuggerAttached`), so a
+# `\bdebugger\b` rule hands live code to a deleter at P1. This anchors on both
+# sides instead: a statement position in front (start of line, `;` or `{`) and
+# a statement terminator behind. That keeps `{ mounted() { debugger; } }` -
+# how it actually appears in a single-file component - while `.debugger` and
+# `debuggerEnabled` match neither side. `if (x) debugger;` is a deliberate
+# miss: the widening that caught it would also catch `foo(debugger)`, which
+# cannot occur, and every property access, which does.
+RE_JS_DEBUGGER = re.compile(r"(?:^|[;{])\s*debugger\s*(?=[;}]|\s*$)")
+
+# `.only` disables every other test in the file, silently, with a green run
+# and a shrunken count nobody reads. Unambiguous in any file: nothing else is
+# spelled `describe.only(`.
+RE_JS_TEST_ONLY = re.compile(
+    r"\b(?:describe|context|it|test|suite|bench)\s*\.\s*only\s*\(")
+
+# Jasmine's spelling of the same thing, and gated on the file being a test
+# file because `fit` is also an ordinary function name - fit a curve, fit a
+# layout, fit a bounding box. Ungated this is a P1 on somebody's maths.
+RE_JS_TEST_ONLY_JASMINE = re.compile(r"^\s*(?:fit|fdescribe|fcontext)\s*\(")
+
+# `console.error` and `console.warn` are absent on purpose: those are how a
+# library reports a real problem, and flagging them is how this rule would
+# stop being read.
+RE_JS_CONSOLE = re.compile(r"\bconsole\s*\.\s*(log|debug|trace|dir)\s*\(")
+
+RE_JS_DEEP_CLONE = re.compile(
+    r"JSON\s*\.\s*parse\s*\(\s*JSON\s*\.\s*stringify\s*\(")
+
+# A role that restates the element's own semantic. Same-line only, because
+# that is where an attribute on an opening tag is written and it is the only
+# form a line-based scanner can attribute to the right element.
+HTML_REDUNDANT_ROLE = [
+    (re.compile(r"<button\b[^>]*\brole\s*=\s*[\"']button[\"']", re.I), "button"),
+    (re.compile(r"<nav\b[^>]*\brole\s*=\s*[\"']navigation[\"']", re.I), "nav"),
+    (re.compile(r"<main\b[^>]*\brole\s*=\s*[\"']main[\"']", re.I), "main"),
+    (re.compile(r"<header\b[^>]*\brole\s*=\s*[\"']banner[\"']", re.I), "header"),
+    (re.compile(r"<footer\b[^>]*\brole\s*=\s*[\"']contentinfo[\"']", re.I),
+     "footer"),
+    (re.compile(r"<(?:ul|ol)\b[^>]*\brole\s*=\s*[\"']list[\"']", re.I), "ul/ol"),
+    (re.compile(r"<li\b[^>]*\brole\s*=\s*[\"']listitem[\"']", re.I), "li"),
+    (re.compile(r"<form\b[^>]*\brole\s*=\s*[\"']form[\"']", re.I), "form"),
+    (re.compile(r"<table\b[^>]*\brole\s*=\s*[\"']table[\"']", re.I), "table"),
+]
+
+# Dead since HTML5 and still emitted constantly. Attribute order is not
+# assumed: each alternative matches its own attribute anywhere in the tag.
+RE_HTML_OBSOLETE = re.compile(
+    r"<script\b[^>]*\btype\s*=\s*[\"']text/javascript[\"']"
+    r"|<script\b[^>]*\blanguage\s*=\s*[\"']javascript[\"']"
+    r"|<link\b[^>]*\btype\s*=\s*[\"']text/css[\"']"
+    r"|<style\b[^>]*\btype\s*=\s*[\"']text/css[\"']"
+    r"|<meta\b[^>]*\bname\s*=\s*[\"']keywords[\"']", re.I)
+
+# Prefixed properties whose unprefixed form has been universally supported for
+# over a decade. This is a NAMED LIST and not a "-webkit- is legacy" rule on
+# purpose: -webkit-line-clamp, -webkit-overflow-scrolling, -webkit-appearance,
+# -webkit-text-size-adjust, -webkit-box-orient and -moz-osx-font-smoothing are
+# still required today, and a sweeping rule would propose deleting live CSS.
+RE_CSS_DEAD_PREFIX = re.compile(
+    r"^\s*-(?:webkit|moz|ms|o)-"
+    r"(border-radius|box-shadow|box-sizing|opacity|border-image"
+    r"|transition(?:-[a-z]+)?|transform(?:-origin)?|animation(?:-[a-z]+)?)"
+    r"\s*:", re.I)
+
+RE_CSS_TRANSITION_ALL = re.compile(
+    r"\btransition(?:-property)?\s*:\s*all\b", re.I)
+
+# `@media {}` and `@supports {}` are excluded by the leading class: an empty
+# at-rule is a different question from an empty rule, and one of them is a
+# build artifact.
+RE_CSS_EMPTY_RULE = re.compile(r"^\s*[^@{}/*\s][^{}]*\{\s*\}\s*;?\s*$")
+
+
+def _css_uncommented(lines):
+    """`lines` with every `/* */` span blanked, tracked across line breaks.
+
+    Blanked rather than dropped, because `.b { color: red } /* note */` has a
+    live declaration and a comment on the same line, and dropping the line
+    loses the finding.
+
+    `comment_body` cannot be reused here: it reads a leading `#` as a comment
+    marker, which is true in Python and shell and false in CSS, where `#id` is
+    a selector. Every `#id { … }` rule in the file would have gone silent.
+
+    A `//` comment - legal in SCSS and LESS, not in CSS - is honoured only at
+    the start of a line. Anywhere else it is far more often the `//` in a
+    `url(https://…)`.
+    """
+    out = []
+    depth = 0
+    for text in lines:
+        if depth == 0 and text.lstrip().startswith("//"):
+            out.append("")
+            continue
+        buf = []
+        i = 0
+        while i < len(text):
+            if depth == 0 and text.startswith("/*", i):
+                depth, i = 1, i + 2
+                buf.append("  ")
+            elif depth and text.startswith("*/", i):
+                depth, i = 0, i + 2
+                buf.append("  ")
+            else:
+                buf.append(" " if depth else text[i])
+                i += 1
+        out.append("".join(buf))
+    return out
+
+
+def check_js(path, lines, findings):
+    is_test = bool(TEST_HINT.search(path))
+    for idx in range(1, len(lines) + 1):
+        text = lines[idx - 1]
+        anchor = anchor_of(lines, idx)
+        code = strip_code(text)
+
+        if RE_JS_DEBUGGER.search(code):
+            # `code` and not `text`: strip_code blanks strings and line
+            # comments, so a commented-out `// debugger;` and the string
+            # "debugger" in a lint fixture both stop being findings.
+            # A shipped `debugger` halts the page for anyone with devtools
+            # open. In a fixture it is usually the thing under test.
+            add(findings, path, idx, "P2" if is_test else "P1", "js-debugger",
+                "debugger statement - halts execution wherever devtools are "
+                "open", anchor)
+
+        if (RE_JS_TEST_ONLY.search(code)
+                or (is_test and RE_JS_TEST_ONLY_JASMINE.search(code))):
+            add(findings, path, idx, "P1", "js-test-only",
+                "focused test - every other test in this file is silently "
+                "skipped and the suite still passes", anchor)
+
+        if not is_test and RE_JS_CONSOLE.search(code):
+            add(findings, path, idx, "P3", "js-console",
+                "console.log left from a debugging pass - confirm, this is "
+                "output in a CLI", anchor)
+
+        if RE_JS_DEEP_CLONE.search(code):
+            add(findings, path, idx, "P3", "js-deep-clone",
+                "JSON.parse(JSON.stringify(x)) - structuredClone, and this "
+                "form drops Date, Map, Set and undefined", anchor)
+
+
+def check_html(path, lines, findings):
+    for idx in range(1, len(lines) + 1):
+        text = lines[idx - 1]
+        anchor = anchor_of(lines, idx)
+
+        for pattern, element in HTML_REDUNDANT_ROLE:
+            if pattern.search(text):
+                add(findings, path, idx, "P3", "html-redundant-role",
+                    f"role restates what <{element}> already means - native "
+                    "semantics need no ARIA", anchor)
+                break
+
+        if RE_HTML_OBSOLETE.search(text):
+            add(findings, path, idx, "P3", "html-obsolete-attr",
+                "attribute obsolete since HTML5", anchor)
+
+
+def check_css(path, lines, findings):
+    # Only a real stylesheet gets the empty-rule rule. In a .vue or .svelte
+    # file the same pattern matches `methods: {}` and `function f() {}` in the
+    # script block - live JavaScript, reported as an abandoned CSS rule. The
+    # other two rules are anchored on syntax that means the same thing in a
+    # style object as in a stylesheet, so they run everywhere.
+    pure_css = os.path.splitext(path)[1].lower() not in MIXED_WEB_EXT
+    clean = _css_uncommented(lines)
+    for idx in range(1, len(lines) + 1):
+        text = clean[idx - 1]
+        anchor = anchor_of(lines, idx)
+
+        if RE_CSS_DEAD_PREFIX.match(text):
+            # P3 and never a bare delete instruction: the line above or below
+            # may be the unprefixed form this one is the fallback for, and
+            # only the last declaration in a rule is the live one.
+            add(findings, path, idx, "P3", "css-dead-prefix",
+                "vendor prefix settled for a decade - confirm nothing here "
+                "relies on it as a fallback", anchor)
+
+        if RE_CSS_TRANSITION_ALL.search(text):
+            add(findings, path, idx, "P3", "css-transition-all",
+                "transition: all animates properties nobody chose, including "
+                "ones added later", anchor)
+
+        if pure_css and RE_CSS_EMPTY_RULE.match(text):
+            add(findings, path, idx, "P3", "css-empty-rule",
+                "empty rule", anchor)
+
+
 def check_bindings(path, lines, findings, exposed_note):
     """Bindings declared and never referenced (fields or locals); locals that
     only rename another binding for a single use.
@@ -2593,6 +2806,17 @@ def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
         check_cpp(path, lines, findings)
         check_bindings(path, lines, findings,
                        "Blueprint/API surface, confirm before removing")
+    # Separate chain, and `if` rather than `elif` for all three: a .vue or
+    # .svelte file is JavaScript, HTML and CSS at once, and an elif would
+    # review a third of it. `check_bindings` is deliberately not called here -
+    # it counts tokens against C#/C++ declaration syntax, and there is no
+    # parser in this file that can tell a JS binding from a property name.
+    if ext in JS_EXT:
+        check_js(path, lines, findings)
+    if ext in HTML_EXT:
+        check_html(path, lines, findings)
+    if ext in CSS_EXT:
+        check_css(path, lines, findings)
     return len(lines)
 
 

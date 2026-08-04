@@ -58,7 +58,11 @@ Every fix that removes code records an `evidence:` line — the lookups that est
 
 ## Languages
 
-**Three are claimed: Python, C# / Unity, and C++ / UE5.** Each has a reference file, dedicated scanner rules, and directive and docstring tables checked against its toolchain.
+**Six are claimed, in two tiers.**
+
+**Full tier — Python, C# / Unity, C++ / UE5.** A reference file each, structure-aware scanner rules, and directive and docstring tables checked against each toolchain.
+
+**Web tier — JavaScript/TypeScript, HTML, CSS**, sharing `web.md`. The judgment standard is as thorough; the scanner rules under it are **regex-level only**, because a stdlib-Python scanner has no JavaScript parser. So nothing deterministic here finds an unused binding, a dead function or a near-duplicate component in a `.ts` file — that half is the judgment pass's, and a quiet scan over a TypeScript diff must not be read as coverage of it.
 
 Any other language gets the universal pass — comments, typography, invisible characters, generic test smells — plus ordinary judgment, under one rule that overrides the rest: **an unrecognised line is kept, not cut.** A directive list missing your ecosystem's suppression is indistinguishable from a complete one at the moment of deletion, and the shipped list does not know `// ktlint-disable` or `// swiftlint:disable`. Keeping a redundant comment in a Kotlin file costs a line; deleting a suppression costs a broken build no test catches.
 
@@ -81,7 +85,8 @@ code-winnow/
     performance.md         # Agent D's gate
     tests.md               # Test-chaff judgment standard
     portability.md         # Companion-skill detection and degraded paths
-    python.md, csharp-unity.md, cpp-ue5.md    # The three claimed languages
+    python.md, csharp-unity.md, cpp-ue5.md    # The full-tier claimed languages
+    web.md                 # JS/TS, HTML and CSS — one file, because a .vue is all three
   scaffold/                # Copied into the workspace: root at Step 0, round at Step 2
     root/README.md         #   the index template — ROUND is its only path placeholder
     round/README.md        #   what is in a round folder, and the filename rule

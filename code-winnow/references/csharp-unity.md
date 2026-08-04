@@ -67,6 +67,18 @@ The scanner encodes this list in `EXPOSED`: a field carrying any of them is repo
 
 **`[RequireComponent]` / `[Header]` / `[Tooltip]` spam** on fields that need none.
 
+## Usings
+
+The safest of the claimed languages to clean, and the reason is the signal: remove a `using` this file needs and the build fails here, now, with a line number. `dotnet format analyzers` and IDE0005 find them, so run one if the project is set up for it. Three cases where that safety does not hold, and the first is the only one that fails *silently*.
+
+**A `using` alias is never dead.** **P1 / never touch.** `using Debug = UnityEngine.Debug;` and `using Random = UnityEngine.Random;` sit in Unity files precisely because `System.Diagnostics.Debug` and `System.Random` exist and would otherwise collide or win. Delete the alias and a bare `Debug.Log` either stops compiling or — where both namespaces are already in scope — quietly resolves to the other type. A clean compile and different behaviour is the exact failure shape this file is organised around, and it belongs beside the attribute table above rather than in a tidy-up list.
+
+**A `using` reached only under an inactive `#if`.** `using UnityEditor;` consumed inside `#if UNITY_EDITOR`, or anything behind a define this configuration does not set, looks unreferenced in the build you are reading and is load-bearing in another. The break lands in a player build, or on the platform nobody compiled locally. Read every conditional block before calling a `using` unused, and treat a file containing `#if` as unverifiable until you have.
+
+**A `using` a global one already supplies** — `GlobalUsings.cs`, or `ImplicitUsings` in the csproj — is genuinely redundant, and that is a real finding rather than a trap. **P3**, and say which global supplies it.
+
+Reordered or reshuffled `using` blocks on lines the change did not touch are not a finding here at all; that is formatting churn, and Diff hygiene in `core-patterns.md` covers it.
+
 ## Idiom drift
 
 **`System.Random` instead of `UnityEngine.Random`**, or `Math` instead of `Mathf` — the latter is float-native and matches surrounding engine code.

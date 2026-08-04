@@ -2468,3 +2468,219 @@ def test_meta_round_dir_resolves_against_the_toplevel_not_the_cwd(repo):
     assert meta["round"] == 2, "round number lost when run from a subdirectory"
     assert meta["prior_round"] == "round-01", \
         "the sibling round was invisible from a subdirectory"
+
+
+# --------------------------------------------------------------------------
+# web tier - JavaScript/TypeScript, HTML, CSS
+#
+# Regex-level rules, so each one is paired with the near-miss that a slightly
+# wider pattern would have swallowed. Three of those near-misses are live code
+# a sweeping rule would have proposed deleting: -webkit-line-clamp, a role on
+# a <div>, and an identifier containing the word "debugger".
+# --------------------------------------------------------------------------
+
+def test_js_debugger_fires_on_the_statement(tmp_path):
+    write(tmp_path, "a.js", "function f() {\n  debugger;\n}\n")
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_debugger_is_quiet_on_an_identifier_containing_the_word(tmp_path):
+    """`\bdebugger\b` matched `debuggerEnabled` and `this.debugger.attach()`,
+    which is live code the rule would have handed to a deleter at P1."""
+    write(tmp_path, "a.js",
+          "const debuggerEnabled = true;\nthis.debugger.attach();\n")
+    assert "js-debugger" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_debugger_demotes_in_a_test_file(tmp_path):
+    write(tmp_path, "tests/a.test.js", "debugger;\n")
+    sev = severities(str(tmp_path), "--paths", "tests/a.test.js")
+    assert sev["js-debugger"] == ["P2"]
+
+
+def test_js_test_only_fires_on_a_focused_test(tmp_path):
+    write(tmp_path, "a.test.js", "describe.only('suite', () => {});\n")
+    assert "js-test-only" in rules(str(tmp_path), "--paths", "a.test.js")
+
+
+def test_js_test_only_fires_on_the_jasmine_spelling(tmp_path):
+    write(tmp_path, "a.test.js", "fdescribe('suite', () => {});\n")
+    assert "js-test-only" in rules(str(tmp_path), "--paths", "a.test.js")
+
+
+def test_js_test_only_is_quiet_when_only_is_a_word_in_the_name(tmp_path):
+    """The test name is a string, and strip_code blanks strings before this
+    rule reads the line - otherwise every test titled "only ..." was P1."""
+    write(tmp_path, "a.test.js", "it('only runs once', () => {});\n")
+    assert "js-test-only" not in rules(str(tmp_path), "--paths", "a.test.js")
+
+
+def test_js_console_fires_in_source(tmp_path):
+    write(tmp_path, "a.ts", "console.log('here');\n")
+    assert "js-console" in rules(str(tmp_path), "--paths", "a.ts")
+
+
+def test_js_console_is_quiet_on_error_and_warn(tmp_path):
+    """Those two are how a library reports a real problem. Flagging them is
+    how the rule stops being read."""
+    write(tmp_path, "a.ts", "console.error(e);\nconsole.warn(msg);\n")
+    assert "js-console" not in rules(str(tmp_path), "--paths", "a.ts")
+
+
+def test_js_console_is_quiet_in_a_test_file(tmp_path):
+    write(tmp_path, "tests/a.spec.ts", "console.log('here');\n")
+    assert "js-console" not in rules(str(tmp_path), "--paths", "tests/a.spec.ts")
+
+
+def test_js_deep_clone_fires(tmp_path):
+    write(tmp_path, "a.js", "const copy = JSON.parse(JSON.stringify(src));\n")
+    assert "js-deep-clone" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_deep_clone_is_quiet_on_an_ordinary_parse(tmp_path):
+    write(tmp_path, "a.js", "const data = JSON.parse(body);\n")
+    assert "js-deep-clone" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_html_redundant_role_fires_on_a_button(tmp_path):
+    write(tmp_path, "a.html", '<button role="button">Go</button>\n')
+    assert "html-redundant-role" in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_redundant_role_is_quiet_on_a_div(tmp_path):
+    """role="button" on a <div> is the whole point of ARIA. A rule matching
+    the attribute alone would have proposed deleting the only thing telling a
+    screen reader what that element is."""
+    write(tmp_path, "a.html", '<div role="button" tabindex="0">Go</div>\n')
+    assert "html-redundant-role" not in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_obsolete_attr_fires_on_text_javascript(tmp_path):
+    write(tmp_path, "a.html", '<script type="text/javascript" src="a.js"></script>\n')
+    assert "html-obsolete-attr" in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_obsolete_attr_is_quiet_on_module_and_json(tmp_path):
+    """`type` on a <script> is obsolete for one value and load-bearing for
+    every other: type="module" changes the parse goal, and an import map or a
+    JSON-LD block is data the browser must not execute."""
+    write(tmp_path, "a.html",
+          '<script type="module" src="a.js"></script>\n'
+          '<script type="application/ld+json">{}</script>\n')
+    assert "html-obsolete-attr" not in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_css_dead_prefix_fires_on_a_settled_property(tmp_path):
+    write(tmp_path, "a.css", ".b {\n  -webkit-border-radius: 4px;\n}\n")
+    assert "css-dead-prefix" in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_dead_prefix_is_quiet_on_prefixes_still_required(tmp_path):
+    """These six have no unprefixed form that works today. A "-webkit- is
+    legacy" rule proposes deleting live CSS, and the page silently loses line
+    clamping, momentum scrolling and native control styling."""
+    write(tmp_path, "a.css",
+          ".b {\n  -webkit-line-clamp: 3;\n  -webkit-box-orient: vertical;\n"
+          "  -webkit-overflow-scrolling: touch;\n  -webkit-appearance: none;\n"
+          "  -webkit-text-size-adjust: 100%;\n"
+          "  -moz-osx-font-smoothing: grayscale;\n}\n")
+    assert "css-dead-prefix" not in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_transition_all_fires(tmp_path):
+    write(tmp_path, "a.css", ".b { transition: all 0.2s ease; }\n")
+    assert "css-transition-all" in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_transition_all_is_quiet_on_a_named_property(tmp_path):
+    write(tmp_path, "a.css", ".b { transition: opacity 0.2s ease; }\n")
+    assert "css-transition-all" not in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_empty_rule_fires(tmp_path):
+    write(tmp_path, "a.css", ".b { }\n")
+    assert "css-empty-rule" in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_empty_rule_is_quiet_on_a_rule_with_declarations(tmp_path):
+    write(tmp_path, "a.css", ".b { color: red; }\n")
+    assert "css-empty-rule" not in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_empty_rule_is_quiet_on_an_empty_at_rule(tmp_path):
+    """An empty @media is a build artifact of a preprocessor, not a rule
+    somebody wrote and abandoned."""
+    write(tmp_path, "a.css", "@media (min-width: 40em) { }\n")
+    assert "css-empty-rule" not in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_a_single_file_component_gets_all_three_web_passes(tmp_path):
+    """A .vue file is JavaScript, HTML and CSS at once. Dispatched with elif,
+    it got a third of its review and the other two thirds reported nothing."""
+    write(tmp_path, "A.vue",
+          '<template>\n  <button role="button">Go</button>\n</template>\n'
+          "<script>\nexport default { mounted() { debugger; } };\n</script>\n"
+          "<style>\n.b { transition: all 0.2s; }\n</style>\n")
+    found = rules(str(tmp_path), "--paths", "A.vue")
+    assert "js-debugger" in found
+    assert "html-redundant-role" in found
+    assert "css-transition-all" in found
+
+
+def test_js_debugger_fires_inside_a_one_line_body(tmp_path):
+    """How it actually appears in a single-file component. A whole-line-only
+    pattern reported nothing here and the .vue pass looked clean."""
+    write(tmp_path, "a.js", "export default { mounted() { debugger; } };\n")
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_debugger_is_quiet_in_a_comment_and_a_string(tmp_path):
+    write(tmp_path, "a.js", '// debugger;\nconst s = "debugger;";\n')
+    assert "js-debugger" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_test_only_jasmine_is_quiet_outside_a_test_file(tmp_path):
+    """`fit` is an ordinary function name - fit a curve, fit a layout, fit a
+    bounding box. Ungated, the Jasmine spelling put a P1 on somebody's maths."""
+    write(tmp_path, "layout.js", "fit(chart, bounds);\n")
+    assert "js-test-only" not in rules(str(tmp_path), "--paths", "layout.js")
+
+
+def test_js_test_only_dot_only_fires_outside_a_test_file(tmp_path):
+    """The other half is unambiguous anywhere: nothing but a focused test is
+    spelled `describe.only(`, and test files are not always named like one."""
+    write(tmp_path, "checks.js", "describe.only('suite', () => {});\n")
+    assert "js-test-only" in rules(str(tmp_path), "--paths", "checks.js")
+
+
+def test_css_empty_rule_is_quiet_in_a_single_file_component(tmp_path):
+    """`methods: {}` and `function f() {}` in a .vue script block match the
+    empty-rule pattern exactly. Live JavaScript, reported as abandoned CSS."""
+    write(tmp_path, "A.vue",
+          "<script>\nexport default {\n  methods: {}\n};\n"
+          "function noop() {}\n</script>\n")
+    assert "css-empty-rule" not in rules(str(tmp_path), "--paths", "A.vue")
+
+
+def test_css_rules_are_quiet_inside_a_block_comment(tmp_path):
+    """Commented-out CSS is not a finding, and the span crosses lines."""
+    write(tmp_path, "a.css",
+          "/*\n.old {\n  -webkit-border-radius: 4px;\n"
+          "  transition: all 0.2s;\n}\n*/\n.b { color: red; }\n")
+    found = rules(str(tmp_path), "--paths", "a.css")
+    assert "css-dead-prefix" not in found
+    assert "css-transition-all" not in found
+
+
+def test_css_rules_still_fire_beside_a_trailing_comment(tmp_path):
+    """Blanking the comment span, not dropping the line: a live declaration
+    and a comment share a line constantly, and dropping it loses the finding."""
+    write(tmp_path, "a.css", ".b { transition: all 0.2s; } /* fade */\n")
+    assert "css-transition-all" in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_id_selector_is_not_read_as_a_comment(tmp_path):
+    """`comment_body` treats a leading `#` as a comment marker, which is true
+    in Python and false in CSS. Reusing it here silenced every #id rule."""
+    write(tmp_path, "a.css", "#hero {\n  transition: all 0.3s;\n}\n")
+    assert "css-transition-all" in rules(str(tmp_path), "--paths", "a.css")
