@@ -121,7 +121,10 @@ Everything except comments and doc files. Runs always.
 > so this class exists only if you look for it. Run the repo's tool if it has one
 > (`ruff check --select F401`, `pyflakes`, `dotnet format analyzers`, ESLint
 > `no-unused-vars`, `include-what-you-use`) and put what it said in `evidence:`; an
-> eyeballed import list is a guess where a deterministic answer was available. Then check
+> eyeballed import list is a guess where a deterministic answer was available. **Use a tool
+> the repo or this machine already has, and do not stand one up** — a scratch project, an
+> installed toolchain, a stubbed compile — to settle a P3. `unverified` is the honest
+> answer, it costs one word, and the finding keeps its severity either way. Then check
 > the traps in the language file, because the tool is wrong in a handful of specific ways
 > per language and those ways are the whole reason you are reading rather than it: a
 > side-effect import, a re-export in `__init__.py`, a name used only inside a string
@@ -337,15 +340,26 @@ report. There is no reason to pay for a third agent on a diff that renames a loc
 > dashes, the new ones are house style: report **the count only, with no proposed rewrite**
 > — *"README.md gained 14 em dashes; the repo's other docs run about 9 per 100 lines —
 > matches convention."* If the repo's docs have none and this diff's do, that is the
-> finding, at **P3**, as **one grouped entry per file** with the count, two exemplars and
-> the replacement (`—` → ` - `, or a rewrite that needs no dash), never one finding per
-> dash. Forty P3 entries is how a report stops being read.
+> finding, at **P3**, as **one grouped entry per file** with the count, two exemplars and a
+> replacement, never one finding per dash. Forty P3 entries is how a report stops being
+> read.
+> **The replacement is measured the same way the finding is.** Read what this repo's prose
+> uses where a dash would have gone — a colon, a comma, a full stop, brackets — and rewrite
+> into that. Do not reach for a mechanical `—` → ` - ` substitution: the spaced hyphen is
+> its own house style and it is just as likely to be absent here, in which case you have
+> replaced one foreign register with another. Grep for the punctuation before proposing it.
 > **Diff lines only, and this direction does not widen.** The untouched-doc exception above
 > is for a line the diff made *false*; it does not reach here, and a documentation file
 > this change did not touch is not yours to restyle however it reads. Do not extend this to
 > comments, docstrings, code, or user-facing strings — those belong to other agents, and
 > `core-patterns.md` says to leave typography alone in every one of them. Smart quotes are
 > not in scope either. Dashes, in docs, on diff lines.
+> **And the convention test stays inside this direction.** "Measured against the repo" is
+> how you judge *typography*, and it is not a general licence to dismiss a finding because
+> the repo already does the thing. A false line is false in a repo full of false lines, and
+> a promotional or unverifiable claim under (2) is judged on whether a reader can check it,
+> never on whether the neighbouring docs read the same way. House style excuses punctuation.
+> It does not excuse content.
 > Severity: **P2** for a stale doc line, and for a header that states something *wrong* —
 > the wrong license, another party's copyright. **P3** for a *missing* header, license
 > ones included, and for a divergent style or doc header. **P1** when a stale line is an
