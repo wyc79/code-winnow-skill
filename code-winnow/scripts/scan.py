@@ -522,6 +522,95 @@ def report_stem(target, when=None):
     return f"current{branch}_target{slug(target)}_{stamp}"
 
 
+def scope_identity(target):
+    """A stable key for pairing rounds, which the human label is not.
+
+    `resolve_diff` returns "uncommitted work (staged, unstaged, 3 untracked)";
+    the count changes between runs, so a matcher keyed on it finds no prior
+    round every time - silently, and indistinguishably from a first run.
+    `meta.json` therefore carries both: `scope` for matching, `scope_label`
+    for reading."""
+    if target in ("staged", "uncommitted", "worktree", "files"):
+        return target
+    return f"branch vs {target}"
+
+
+def round_number(round_dir):
+    m = re.search(r"round-(\d+)$",
+                  os.path.basename(os.path.normpath(round_dir)))
+    return int(m.group(1)) if m else None
+
+
+def prior_round(round_dir, scope_id):
+    """The newest sibling round that reviewed the same scope, or None.
+
+    Replaces a `ls -1t round-*/*.json | grep -v -- '-postfix\\|-p3'` search,
+    which was a blocklist of ad-hoc filename suffixes and grew every time an
+    agent invented one. Rounds written before meta.json existed are skipped
+    rather than guessed at: reconciling against a mismatched baseline moves
+    findings nobody touched into `resolved`, which reads as "your fixes
+    worked"."""
+    parent = os.path.dirname(os.path.abspath(round_dir))
+    me = os.path.basename(os.path.normpath(round_dir))
+    best, best_when = None, ""
+    try:
+        names = sorted(os.listdir(parent))
+    except OSError:
+        return None
+    for name in names:
+        if name == me or not re.fullmatch(r"round-\d+", name):
+            continue
+        try:
+            with open(os.path.join(parent, name, "meta.json"),
+                      encoding="utf-8") as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if m.get("scope") != scope_id:
+            continue
+        when = m.get("generated") or ""
+        if when >= best_when:
+            best, best_when = name, when
+    return best
+
+
+def _short_sha(rev):
+    out = _git(["rev-parse", "--short", rev])
+    return out.strip() if out and out.strip() else None
+
+
+def _merge_base_sha(ref):
+    out = _git(["merge-base", ref, "HEAD"])
+    if not out or not out.strip():
+        return None
+    return _short_sha(out.strip())
+
+
+def meta_document(round_dir, label, target, stem, generated, scope_flag,
+                  feature=None):
+    """What this round compared to what.
+
+    The filenames inside a round no longer say what was reviewed, so this file
+    and the identity block at the top of every report are the only two places
+    that fact is recorded."""
+    ref = None if target in ("staged", "uncommitted", "worktree", "files") \
+        else target
+    return {
+        "round": round_number(round_dir),
+        "stem": stem,
+        "branch": current_branch(),
+        "base": ref,
+        "base_sha": _short_sha(ref) if ref else None,
+        "merge_base": _merge_base_sha(ref) if ref else None,
+        "scope": scope_identity(target),
+        "scope_label": label,
+        "scope_flag": scope_flag,
+        "generated": generated.isoformat(timespec="seconds"),
+        "feature": feature,
+        "prior_round": prior_round(round_dir, scope_identity(target)),
+    }
+
+
 # --------------------------------------------------------------------------
 # reading
 # --------------------------------------------------------------------------
@@ -2535,6 +2624,14 @@ def main():
                     help="a report-shaped JSON of findings the user already "
                          "rejected; matches move to 'declined' and out of the "
                          "live list instead of resurfacing every run")
+    ap.add_argument("--meta", metavar="ROUND_DIR",
+                    help="print this round's meta.json - what was compared to "
+                         "what - and exit. Takes the round directory, because "
+                         "it derives `round` from the name and scans sibling "
+                         "round-*/meta.json for `prior_round`.")
+    ap.add_argument("--feature", metavar="TEXT",
+                    help="the user's feature phrase, recorded verbatim in "
+                         "meta.json; omit when no feature was named")
     args = ap.parse_args()
 
     if args.report_name:
@@ -2569,6 +2666,31 @@ def main():
             print(msg, file=sys.stderr)
             return 2 if refused else 1
         emit_stem(report_stem(target))
+        return 0
+
+    if args.meta:
+        generated = datetime.datetime.now()
+        if args.paths:
+            label, target = "named files", "files"
+        else:
+            label, target, _added = resolve_diff(args.scope, args.base)
+            if target is None:
+                # Same shape as --report-name's empty-scope path: a refusal is
+                # a question for the user, not a flag to retry differently.
+                refused = bool(REFUSALS)
+                msg = (" ".join(REFUSALS) if refused else
+                       "No diff found - cannot describe an empty scope.")
+                print(json.dumps({"round": round_number(args.meta),
+                                  "scope": None,
+                                  "warnings": WARNINGS + [msg]}, indent=2))
+                return 2 if refused else 1
+        flag = f"--scope {args.scope}"
+        if args.base:
+            flag += f" --base {args.base}"
+        stem = args.stem or report_stem(target, generated)
+        print(json.dumps(meta_document(args.meta, label, target, stem,
+                                       generated, flag, args.feature),
+                         indent=2))
         return 0
 
     findings = []

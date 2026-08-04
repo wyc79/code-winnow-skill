@@ -2301,3 +2301,149 @@ def test_mutation_rows_still_apply():
         + "\n  ".join(stale)
         + "\n\nUpdate the row to the code as it now stands, or delete it if "
           "the guard is genuinely gone.")
+
+
+# --------------------------------------------------------------------------
+# --meta
+# --------------------------------------------------------------------------
+
+def _meta(cwd, round_dir, *args):
+    p = run(cwd, "--meta", round_dir, *args)
+    assert p.returncode == 0, p.stdout + p.stderr
+    return json.loads(p.stdout)
+
+
+def test_meta_scope_is_stable_across_untracked_counts(repo):
+    """The matcher pairs rounds on `scope`, and the human label cannot serve.
+    `resolve_diff` returns "uncommitted work (2 untracked)" - the count is in
+    the string and changes between runs, so a matcher keyed on it finds no
+    prior round every time and every report says "Previous run: none",
+    indistinguishably from a genuine first run."""
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True)
+    write(repo, "a.py", "x = 1\n")
+    first = _meta(repo, str(rd))
+
+    write(repo, "b.py", "y = 2\n")
+    write(repo, "c.py", "z = 3\n")
+    second = _meta(repo, str(rd))
+
+    assert first["scope"] == second["scope"] == "worktree"
+    assert first["scope_label"] != second["scope_label"], \
+        "the label was expected to carry the untracked count"
+
+
+def test_meta_scope_label_matches_the_json_scope(repo):
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True)
+    write(repo, "a.py", "x = 1\n")
+    meta = _meta(repo, str(rd))
+    data = json.loads(run(repo, "--json").stdout)
+    assert meta["scope_label"] == data["scope"]
+
+
+def test_meta_carries_every_required_key(repo):
+    rd = repo / ".code-winnow" / "round-02"
+    rd.mkdir(parents=True)
+    write(repo, "a.py", "x = 1\n")
+    meta = _meta(repo, str(rd))
+    for k in ("round", "stem", "branch", "base", "base_sha", "merge_base",
+              "scope", "scope_label", "scope_flag", "generated", "feature",
+              "prior_round"):
+        assert k in meta, f"{k} missing from meta.json"
+    assert meta["round"] == 2
+    assert meta["branch"] == "main"
+    assert meta["feature"] is None
+    assert meta["stem"].startswith("currentmain_worktree_")
+
+
+def test_meta_records_the_feature_phrase_verbatim(repo):
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True)
+    write(repo, "a.py", "x = 1\n")
+    meta = _meta(repo, str(rd), "--feature", "winnow the dash cooldown work")
+    assert meta["feature"] == "winnow the dash cooldown work"
+
+
+def test_meta_branch_scope_records_the_base(repo):
+    write(repo, "a.py", "x = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "seed2")
+    git(repo, "checkout", "-qb", "feat")
+    write(repo, "b.py", "y = 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "work")
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True)
+    meta = _meta(repo, str(rd), "--scope", "branch", "--base", "main")
+    assert meta["scope"] == "branch vs main"
+    assert meta["base"] == "main"
+    assert meta["branch"] == "feat"
+    assert meta["base_sha"] and meta["merge_base"]
+    assert meta["scope_flag"] == "--scope branch --base main"
+
+
+def test_meta_prior_round_matches_scope_not_recency(repo):
+    """A branch round is not a baseline for a worktree round. Reconciling
+    across scopes moves every out-of-scope finding into `resolved`, which
+    reads as "your fixes worked" for findings nobody touched."""
+    ws = repo / ".code-winnow"
+    (ws / "round-01").mkdir(parents=True)
+    (ws / "round-01" / "meta.json").write_text(json.dumps(
+        {"round": 1, "scope": "worktree", "generated": "2026-01-01T00:00:00"}),
+        encoding="utf-8")
+    (ws / "round-02").mkdir()
+    (ws / "round-02" / "meta.json").write_text(json.dumps(
+        {"round": 2, "scope": "branch vs main",
+         "generated": "2026-06-01T00:00:00"}), encoding="utf-8")
+    (ws / "round-03").mkdir()
+    write(repo, "a.py", "x = 1\n")
+    meta = _meta(repo, str(ws / "round-03"))
+    assert meta["scope"] == "worktree"
+    assert meta["prior_round"] == "round-01", \
+        "picked the more recent round rather than the matching one"
+
+
+def test_meta_prior_round_takes_the_newest_matching(repo):
+    ws = repo / ".code-winnow"
+    for n, when in (("round-01", "2026-01-01T00:00:00"),
+                    ("round-02", "2026-06-01T00:00:00")):
+        (ws / n).mkdir(parents=True)
+        (ws / n / "meta.json").write_text(json.dumps(
+            {"round": int(n[-2:]), "scope": "worktree", "generated": when}),
+            encoding="utf-8")
+    (ws / "round-03").mkdir()
+    write(repo, "a.py", "x = 1\n")
+    assert _meta(repo, str(ws / "round-03"))["prior_round"] == "round-02"
+
+
+def test_meta_skips_legacy_rounds_without_meta_json(repo):
+    """Rounds predating meta.json carry no scope. Inferring one from a legacy
+    filename is exactly the parsing this design removes, and a wrong baseline
+    is worse than no baseline."""
+    ws = repo / ".code-winnow"
+    (ws / "round-01").mkdir(parents=True)
+    (ws / "round-01" / "currentmain_worktree_20260101-0000.json").write_text(
+        "{}", encoding="utf-8")
+    (ws / "round-02").mkdir()
+    write(repo, "a.py", "x = 1\n")
+    assert _meta(repo, str(ws / "round-02"))["prior_round"] is None
+
+
+def test_meta_ignores_a_round_with_unreadable_meta_json(repo):
+    ws = repo / ".code-winnow"
+    (ws / "round-01").mkdir(parents=True)
+    (ws / "round-01" / "meta.json").write_text("{not json", encoding="utf-8")
+    (ws / "round-02").mkdir()
+    write(repo, "a.py", "x = 1\n")
+    assert _meta(repo, str(ws / "round-02"))["prior_round"] is None
+
+
+def test_meta_on_an_empty_scope_is_loud_and_nonzero(repo):
+    rd = repo / ".code-winnow" / "round-01"
+    rd.mkdir(parents=True)
+    p = run(repo, "--meta", str(rd))
+    assert p.returncode == 1, p.stdout + p.stderr
+    data = json.loads(p.stdout)
+    assert data["scope"] is None
+    assert data["warnings"], "an empty scope must say why"

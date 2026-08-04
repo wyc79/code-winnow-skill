@@ -50,6 +50,24 @@ MUTATIONS = [
      "    if False:\n        return None\n",
      "directive"),
 
+    # meta.json's `scope` is a stable identity, never resolve_diff's human
+    # label - which carries an untracked count that changes between runs. A
+    # matcher keyed on the label finds no prior round, every run, and every
+    # report says "Previous run: none" indistinguishably from a first run.
+    ("meta-scope-identity", SCAN,
+     '    if target in ("staged", "uncommitted", "worktree", "files"):\n'
+     '        return target\n'
+     '    return f"branch vs {target}"',
+     '    return "worktree"',
+     "meta_scope_is_stable or meta_branch_scope"),
+
+    # Pairing rounds by recency alone reconciles a worktree run against a
+    # branch baseline, which reports every untouched finding as `resolved`.
+    ("meta-prior-round-scope", SCAN,
+     '        if m.get("scope") != scope_id:\n            continue\n',
+     '        if False:\n            continue\n',
+     "meta_prior_round_matches_scope"),
+
     # Numbering in arrival order instead of file order: ast.walk is
     # breadth-first, so a nested handler is numbered before a shallower one
     # written below it, and the executor counts anchors top-to-bottom.
