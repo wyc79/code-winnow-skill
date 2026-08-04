@@ -15,12 +15,18 @@ A mutation that leaves the suite green means the tests are not pinning it.
 
 Slow (one pytest run per mutation), so it is not part of the default suite.
 Run it whenever you add a regression test, and before believing one.
+
+**It never edits the tree it is run from.** Everything is copied to a temp
+directory first and broken there, so an interrupted run cannot leave a
+sabotaged scanner on disk, and the repo stays safe to edit while it runs.
 """
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
@@ -176,6 +182,24 @@ if not m.group(1).upper().startswith("APPROVED"):
      "    return False",
      "vendor_doc_marker or documentation_example"),
 
+    # Reconciliation must see every finding that is still TRUE, not every
+    # finding this report happens to print. Dropping the held-back preexisting
+    # set reports untouched-line findings as "no longer true" the first time
+    # anyone reconciles against a --whole-files baseline - which SKILL.md Step
+    # 4 writes by name.
+    ("since-counts-preexisting", SCAN,
+     "            findings + declined + filtered_preexisting, args.since)",
+     "            findings + declined, args.since)",
+     "whole_files_baseline or genuinely_fixed"),
+
+    # `finding_key` reads three fields; the guards used to check two. These
+    # files are hand-maintained by instruction, so the third being absent is an
+    # expected input - and it exited 1 with empty stdout under --json.
+    ("prior-entry-key-fields", SCAN,
+     'KEY_FIELDS = ("path", "rule", "message")',
+     'KEY_FIELDS = ("path", "rule")',
+     "partial_prior"),
+
     # Pinning the UNC separators to exactly two-then-one matches a config file
     # and misses every escaped source literal, which is the commoner form.
     ("unc-escaped-separators", SCAN,
@@ -194,6 +218,39 @@ if not m.group(1).upper().startswith("APPROVED"):
      r'r"\\{2,4}',
      "drive_path"),
 
+    # A prior finding whose file was never opened is not evidence of a fix.
+    ("since-out-of-scope-split", SCAN,
+     "            if scanned_paths is not None and f[\"path\"] not in scanned_paths:",
+     "            if False:",
+     "left_scope or scanned_file_is_still"),
+
+    # `auto` on a dirty branch reviews the uncommitted work only. Deliberate -
+    # but going silent about the commits it skipped is what made it a hole.
+    ("auto-out-of-scope-commits-warning", SCAN,
+     "                    warn_if_commits_are_out_of_scope(base)",
+     "                    pass",
+     "dirty_branch_warns or clean_tree_branch_review_does_not"),
+
+    # A refusal produces no stem, so the empty-scope guard fires on top of it
+    # and its advice ("pass --base <ref>") is the retry Step 1 forbids.
+    ("step2-refusal-passthrough", SKILL,
+     """  if grep -q '^REFUSING:' "$ERRF"; then""",
+     """  if false; then""",
+     "refusal"),
+
+    # Without the text test the builder cats untracked binaries into the file
+    # five judgment agents are handed, and `-s` passes because it is large.
+    ("step3-binary-exclusion", SKILL,
+     '      if ! LC_ALL=C grep -qI . "$f" 2>/dev/null; then',
+     '      if false; then',
+     "untracked_binary"),
+
+    # A backup path pasted out of the plan header instead of computed.
+    ("step5a-backup-path-shape", SKILL,
+     'if re.search(r"\\(|\\s{2,}", dest):',
+     'if False:',
+     "pasted_from_the_plan"),
+
     # A test file is a mutation target too. The secrets fixtures are assembled
     # from pieces so that scanning test_scan.py does not trip the rule it
     # tests; writing one as a literal is the obvious, readable thing a
@@ -211,12 +268,53 @@ def run(argv, cwd=None):
                           encoding="utf-8", errors="replace")
 
 
+# Everything this script breaks, it breaks inside a throwaway copy.
+COPY_DIRS = ("scripts", "tests", "references")
+COPY_FILES = ("SKILL.md",)
+
+
+def mirror(dst):
+    """Copy the skill into `dst`, so a mutation never reaches the real tree.
+
+    This used to edit `scripts/scan.py` in place and put it back in a
+    `finally`. That is correct only while nothing goes wrong: Ctrl-C between
+    the two writes, a crashed interpreter, or a machine losing power all leave
+    a deliberately-broken scanner on disk with no warning - and the failure is
+    invisible, because a mutated scanner still runs and still prints findings.
+    It also means the tree is unsafe to touch for the several minutes this
+    takes, so an edit made in parallel is silently reverted by the restore.
+    Both were observed. A copy removes the whole class.
+    """
+    ignore = shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.pyc")
+    for name in COPY_DIRS:
+        src = os.path.join(WINNOW, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(dst, name), ignore=ignore)
+    for name in COPY_FILES:
+        src = os.path.join(WINNOW, name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dst, name))
+
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
-    pristine = {t: open(t, encoding="utf-8").read()
+    work = tempfile.mkdtemp(prefix="code-winnow-mutations-")
+    try:
+        return _run_all(only, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _run_all(only, work):
+    mirror(work)
+    # MUTATIONS names paths in the real tree; every write goes to the mirror.
+    def mirrored(target):
+        return os.path.join(work, os.path.relpath(target, WINNOW))
+
+    pristine = {t: open(mirrored(t), encoding="utf-8").read()
                 for t in {m[1] for m in MUTATIONS}}
 
-    base = run([sys.executable, "-m", "pytest", "tests/", "-q"], cwd=WINNOW)
+    base = run([sys.executable, "-m", "pytest", "tests/", "-q"], cwd=work)
     if base.returncode != 0:
         print("BASELINE SUITE IS RED - fix that first")
         print(base.stdout[-2000:])
@@ -233,12 +331,13 @@ def main():
                   f"({os.path.basename(target)} changed; update this script)")
             failures.append(name)
             continue
+        path = mirrored(target)
         try:
-            open(target, "w", encoding="utf-8").write(original.replace(find, repl, 1))
+            open(path, "w", encoding="utf-8").write(original.replace(find, repl, 1))
             got = run([sys.executable, "-m", "pytest", "tests/", "-q", "-k", kexpr],
-                      cwd=WINNOW)
+                      cwd=work)
         finally:
-            open(target, "w", encoding="utf-8").write(original)
+            open(path, "w", encoding="utf-8").write(original)
 
         tail = got.stdout.strip().splitlines()[-1] if got.stdout.strip() else "(no output)"
         nfail = len(re.findall(r"^FAILED ", got.stdout, re.M))

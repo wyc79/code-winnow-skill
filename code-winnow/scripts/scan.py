@@ -86,6 +86,11 @@ REMOVED_AT = defaultdict(set)
 # counted against the same bytes the rules fired on.
 FILE_LINES = {}
 
+# Every path opened and read this run. `reconcile` needs it to distinguish a
+# prior finding that is GONE from one whose file was simply not in this run's
+# scope - only the first is news, and only the first is honest to report.
+SCANNED_PATHS = set()
+
 
 def warn(msg):
     if msg not in WARNINGS:
@@ -337,6 +342,37 @@ def refuse_staged_desync(moved):
     REFUSALS.append(msg)
 
 
+def warn_if_commits_are_out_of_scope(base):
+    """`auto` on a dirty branch reviews the uncommitted work only. Say so.
+
+    The default resolves to the union of uncommitted work whenever the tree is
+    dirty, and only falls back to the branch diff when it is clean. So the
+    normal shape of this skill's headline case - an agent wrote a feature,
+    committed it, and left a few edits on top - reviews the edits and not the
+    feature. Nothing was wrong with that reading of `auto`; what was wrong is
+    that the commits went unmentioned, and README's own trigger list includes
+    "about to open a PR", which is branch-shaped.
+
+    Deliberately a warning and not a change of default. Silently widening
+    `auto` to the whole branch would review 200 commits for someone who meant
+    "my uncommitted tweaks", which is the reviewer-hostile diff this skill
+    opens by refusing. The four-field integrity check in SKILL.md already
+    tells the agent to read `warnings`; this is a fact for that check.
+    """
+    ref = base or discover_base()
+    if not ref or not ref_exists(ref):
+        return          # no base to compare against - discover_base warns
+    out = _git(["rev-list", "--count", f"{ref}..HEAD"])
+    try:
+        n = int((out or "0").strip())
+    except ValueError:
+        return
+    if n:
+        warn(f"scope is uncommitted work only, but this branch is {n} "
+             f"commit(s) ahead of '{ref}' - that work is NOT being reviewed. "
+             f"Pass --scope branch to review the branch instead.")
+
+
 def resolve_diff(scope="auto", base=None):
     """Return (label, target, {path: set(new_lines)}).
 
@@ -349,6 +385,41 @@ def resolve_diff(scope="auto", base=None):
     if repo_root() is None:
         warn("not inside a git repository - use --paths to scan files directly")
         return None, None, {}
+
+    def collect_untracked(added):
+        """Fold every untracked file into `added`; return the paths taken.
+
+        Shared by the worktree scope and the branch scope, and that sharing is
+        the point. Branch scope used to skip this entirely, so a new file that
+        had never been committed was invisible to `--scope branch` while
+        `complete` stayed true and `warnings` stayed empty - a P1 in a
+        generated test file simply absent, with every integrity field saying
+        the scan was whole. Untracked files are also where generated code
+        concentrates, which is the case this skill exists for.
+
+        It is the right call for branch scope specifically because the branch
+        diff already runs merge-base to WORKTREE, not to HEAD: uncommitted
+        edits are in scope, so uncommitted *files* were the one inconsistent
+        exclusion. SKILL.md's Step 3 review-input builder has always appended
+        them for this scope, so the scanner was also the odd half of a pair
+        that has to describe the same bytes.
+        """
+        new_files = []
+        for rel in untracked_files():
+            reason = skip_path(rel)
+            if reason:
+                # Record it. Dropping these in silence meant a branch whose
+                # only new files are generated came back as an empty scope,
+                # which reads exactly like a clean tree.
+                if not WORKSPACE_HINT.search(rel):
+                    READ_ERRORS.append({"path": rel,
+                                        "error": "skipped: " + reason})
+                continue
+            n = count_lines(rel)
+            if n:
+                added[rel].update(range(1, n + 1))
+                new_files.append(rel)
+        return new_files
 
     def worktree():
         # One diff, against HEAD. Diffing the index and the worktree
@@ -370,21 +441,7 @@ def resolve_diff(scope="auto", base=None):
             names = _git(args)
             if names and names.strip():
                 sources.append(label)
-        new_files = []
-        for rel in untracked_files():
-            reason = skip_path(rel)
-            if reason:
-                # Record it. Dropping these in silence meant a branch whose
-                # only new files are generated came back as an empty scope,
-                # which reads exactly like a clean tree.
-                if not WORKSPACE_HINT.search(rel):
-                    READ_ERRORS.append({"path": rel,
-                                        "error": "skipped: " + reason})
-                continue
-            n = count_lines(rel)
-            if n:
-                added[rel].update(range(1, n + 1))
-                new_files.append(rel)
+        new_files = collect_untracked(added)
         if new_files:
             sources.append(f"{len(new_files)} untracked")
         added = in_scope(added)
@@ -410,6 +467,8 @@ def resolve_diff(scope="auto", base=None):
         else:
             added, sources = worktree()
             if added:
+                if scope == "auto":
+                    warn_if_commits_are_out_of_scope(base)
                 return ("uncommitted work (" + ", ".join(sources) + ")",
                         "worktree", added)
         if scope != "auto":
@@ -439,9 +498,16 @@ def resolve_diff(scope="auto", base=None):
     if raw is None:
         warn(f"could not diff against '{ref}' (no merge base?)")
         return None, None, {}
-    added = in_scope(parse_diff(raw))
+    added = parse_diff(raw)
+    collect_untracked(added)
+    added = in_scope(added)
     if not added:
         return None, None, {}
+    # The label stays exactly `branch vs <ref>` even when untracked files were
+    # folded in. SKILL.md's Step 3 builder recovers the base with
+    # `${SRC#branch vs }` and feeds it to `git merge-base`, so a count appended
+    # here would be parsed as part of the ref name and the review input would
+    # be built against nothing. The count is visible in `files` instead.
     return f"branch vs {ref}", ref, added
 
 
@@ -2172,6 +2238,39 @@ def finding_key(f):
     return (f["path"], f["rule"], f["message"], f.get("anchor", ""))
 
 
+# The fields `finding_key` reads off a prior entry.
+KEY_FIELDS = ("path", "rule", "message")
+# `--since` echoes each matched prior entry straight into `resolved`, and the
+# text printer reads these off it. `--declined` needs only the key fields: the
+# entries it emits are this run's own findings, not the ones it matched against.
+ECHO_FIELDS = KEY_FIELDS + ("severity", "line")
+
+
+def usable_entries(entries, flag, needs):
+    """Prior-report entries carrying every field we are going to read.
+
+    Both callers used to check `path` and `rule` and then hand the entry to
+    `finding_key`, which also reads `message`. So a hand-written `declined.json`
+    holding `{path, rule, line}` - the obvious thing to write, and close to
+    what SKILL.md's own example invites - raised `KeyError: 'message'`: exit 1,
+    empty stdout, and under `--json` a traceback where the consumer was
+    promised a report. These files are explicitly hand-maintained, so a partial
+    entry is an expected input rather than a bug, and the only behaviour that
+    leaves the run usable is to skip it and say which flag dropped what.
+    """
+    ok, bad = [], 0
+    for e in entries:
+        if isinstance(e, dict) and all(k in e for k in needs):
+            ok.append(e)
+        else:
+            bad += 1
+    if bad:
+        warn(f"{flag}: ignored {bad} malformed entr{'y' if bad == 1 else 'ies'}"
+             f" - each needs {', '.join(needs)}, which is what an entry is "
+             "matched on; copy the finding object as the scanner emitted it")
+    return ok
+
+
 def load_report(path, flag):
     """A previous run's JSON, or None after warning why not."""
     try:
@@ -2268,9 +2367,7 @@ def split_declined(findings, declined_path):
         by_key[finding_key(f)].append(i)
 
     taken = set()
-    for d in prior["findings"]:
-        if not (isinstance(d, dict) and "path" in d and "rule" in d):
-            continue
+    for d in usable_entries(prior["findings"], "--declined", KEY_FIELDS):
         pool = [i for i in by_key[finding_key(d)] if i not in taken]
         if not pool:
             continue
@@ -2300,39 +2397,52 @@ def split_declined(findings, declined_path):
     return live, declined
 
 
-def reconcile(findings, prior_path):
-    """Mark findings new/persisting and return the ones that are gone.
+def reconcile(findings, prior_path, scanned_paths=None):
+    """Mark findings new/persisting; return (generated, resolved, out_of_scope).
 
     A finding present in the prior report and absent now is either fixed or no
     longer true. Either way it must not be re-reported as live - a punch list
     that keeps resurfacing settled items stops being read.
+
+    `scanned_paths` is what keeps "absent" honest. A file that left the scope
+    between runs - committed, unstaged, or simply not part of the narrower
+    scope this run resolved - was never opened, so nothing was learned about
+    its findings and calling them resolved is a claim we cannot support. That
+    happens on the ordinary flow: winnow, commit some of it, winnow again with
+    a still-dirty tree, and the committed file's live P1s came back as "no
+    longer true". They go to `out_of_scope` instead, which says the true
+    thing: not looked at this time. Pass None to skip the distinction.
     """
     prior = load_report(prior_path, "--since")
     if prior is None:
-        return None, []
+        return None, [], []
 
-    prior_findings = prior.get("findings", [])
+    prior_findings = usable_entries(prior.get("findings", []), "--since",
+                                    ECHO_FIELDS)
     if (prior_findings and isinstance(prior_findings[0], dict)
             and "anchor" not in prior_findings[0]):
         warn(f"--since: {prior_path} predates anchored keys - "
              "reconciliation may be approximate")
     prior_keys = {}
     for f in prior_findings:
-        if isinstance(f, dict) and "path" in f and "rule" in f:
-            prior_keys.setdefault(finding_key(f), []).append(f)
+        prior_keys.setdefault(finding_key(f), []).append(f)
     now_counts = defaultdict(int)
     for f in findings:
         key = finding_key(f)
         now_counts[key] += 1
         f["status"] = "persisting" if key in prior_keys else "new"
 
-    resolved = []
+    resolved, out_of_scope = [], []
     for key, group in prior_keys.items():
         gone = len(group) - now_counts.get(key, 0)
         for f in group[:max(0, gone)]:
-            f["status"] = "resolved"
-            resolved.append(f)
-    return prior.get("generated"), resolved
+            if scanned_paths is not None and f["path"] not in scanned_paths:
+                f["status"] = "out-of-scope"
+                out_of_scope.append(f)
+            else:
+                f["status"] = "resolved"
+                resolved.append(f)
+    return prior.get("generated"), resolved, out_of_scope
 
 
 # --------------------------------------------------------------------------
@@ -2351,6 +2461,10 @@ def scan_file(path, findings, max_bytes=DEFAULT_MAX_BYTES):
     # Snapshot for number_anchor_matches: re-reading there could see different
     # bytes if the tree moved mid-scan.
     FILE_LINES[path] = lines
+    # Recorded here rather than from the scope map, so it means "opened and
+    # read" rather than "intended to read". `reconcile` uses it to tell a
+    # finding that is gone from one whose file was never looked at.
+    SCANNED_PATHS.add(path)
     ext = os.path.splitext(path)[1].lower()
     check_universal(path, lines, findings)
     if ext not in PY_EXT:
@@ -2437,6 +2551,9 @@ def main():
         return 0
 
     findings = []
+    # In-scope-and-true findings this report will not print, kept only so that
+    # `--since` can see they are still true. Never emitted.
+    filtered_preexisting = []
     in_scope_files = 0
     scanned_files = 0
     added_lines = 0
@@ -2486,7 +2603,8 @@ def main():
                     "report_stem": args.stem or report_stem(target or "worktree"),
                     "prior_report": None,
                     "files": 0, "scanned_files": 0, "added_lines": 0,
-                    "findings": [], "resolved": [], "declined": [],
+                    "findings": [], "resolved": [], "out_of_scope": [],
+                    "declined": [],
                     "errors": READ_ERRORS, "warnings": WARNINGS + [msg],
                     "complete": not READ_ERRORS and not REFUSALS,
                 }, indent=2))
@@ -2509,12 +2627,26 @@ def main():
                 REMOVED_AT.get(f["path"], set()))
             if not f["preexisting"] or args.whole_files:
                 kept.append(f)
+            else:
+                # Held, not discarded. It is out of this report's scope but it
+                # is still TRUE, and reconciliation counts truth - see the
+                # `--since` call below.
+                filtered_preexisting.append(f)
         findings = kept
 
     # Reconcile the FULL set, then filter. Reconciling the filtered set meant
     # raising --min-severity between runs reported every finding the filter
     # dropped as "no longer true" - which reads as "fixed" and tells the
     # reviewer to strike a live item off the list.
+    #
+    # "Full" means every filter, and the preexisting one above is the other
+    # one. It runs earlier than this comment does because it is what decides
+    # what a *report* contains - but it had the identical defect: a run with
+    # --whole-files writes a baseline holding untouched-line findings, the next
+    # ordinary run drops them here, and every one came back `resolved`. Step 4
+    # of SKILL.md writes exactly that baseline as `<stem>-preexisting.json`, so
+    # this was not a hypothetical ordering. Absent-because-out-of-scope and
+    # absent-because-fixed are different facts and only one of them is news.
     generated = datetime.datetime.now()
     stem = args.stem or report_stem(target, generated)
     number_occurrences(findings)
@@ -2522,14 +2654,20 @@ def main():
     declined = []
     if args.declined:
         findings, declined = split_declined(findings, args.declined)
-    prior_when, resolved = None, []
+    prior_when, resolved, out_of_scope = None, [], []
     if args.since:
         # Reconcile against live AND declined. A declined finding is still
         # true - the user just does not want to hear about it - so counting
         # only the live ones reported it as "no longer true", which reads as
         # fixed. Declined and resolved are opposite claims about the same
         # line and it must never make both.
-        prior_when, resolved = reconcile(findings + declined, args.since)
+        #
+        # `scanned_paths` is every file this run actually opened. A prior
+        # finding in a file that is not in it was not examined, so it cannot
+        # be called fixed - see `reconcile`.
+        prior_when, resolved, out_of_scope = reconcile(
+            findings + declined + filtered_preexisting, args.since,
+            scanned_paths=set(SCANNED_PATHS))
         for f in declined:
             f["status"] = "declined"  # reconcile restamps everything it counts
 
@@ -2538,6 +2676,8 @@ def main():
     findings.sort(key=lambda f: (SEVERITY_ORDER[f["severity"]], f["path"], f["line"]))
     resolved = [f for f in resolved
                 if SEVERITY_ORDER.get(f.get("severity"), 0) <= cutoff]
+    out_of_scope = [f for f in out_of_scope
+                    if SEVERITY_ORDER.get(f.get("severity"), 0) <= cutoff]
     declined = [f for f in declined if SEVERITY_ORDER[f["severity"]] <= cutoff]
 
     # A read failure is a hole in the scan, not a detail. Say so in both modes.
@@ -2567,6 +2707,7 @@ def main():
             "added_lines": added_lines,
             "findings": findings,
             "resolved": resolved,
+            "out_of_scope": out_of_scope,
             "declined": declined,
             "errors": READ_ERRORS,
             "warnings": WARNINGS,
@@ -2604,6 +2745,12 @@ def main():
               f"({len(resolved)}) ---")
         print("Fixed or overtaken by events. Do not re-report as live.\n")
         dump(resolved)
+    if out_of_scope:
+        print(f"--- in the prior report, NOT looked at this run "
+              f"({len(out_of_scope)}) ---")
+        print("Their files were not in this run's scope, so nothing was "
+              "learned about them. NOT fixed - unexamined.\n")
+        dump(out_of_scope)
     if declined:
         print(f"--- previously declined ({len(declined)}) ---")
         print("Raised before and rejected. Noted once, not re-argued.\n")

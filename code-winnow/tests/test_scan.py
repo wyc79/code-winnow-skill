@@ -89,6 +89,48 @@ def test_untracked_files_are_in_scope(repo):
     assert "dead-local" in rules(str(repo))
 
 
+def test_untracked_files_are_in_scope_under_branch_too(repo):
+    """The silent half of the rule above.
+
+    `--scope branch` skipped untracked files entirely, so a P1 in a new
+    generated test file was absent from the report while `complete` stayed
+    true, `warnings` stayed empty and `errors` stayed empty - every integrity
+    field in SKILL.md's four-field check saying the scan was whole. It is also
+    inconsistent on its own terms: the branch diff runs merge-base to the
+    WORKTREE, so uncommitted edits were already in scope and only uncommitted
+    files were not - and SKILL.md's Step 3 builder has always appended them
+    for this scope, so the two halves described different bytes.
+    """
+    git(repo, "checkout", "-qb", "feat")
+    write(repo, "src.py", "def f():\n    try:\n        pass\n"
+                          "    except Exception:\n        pass\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "work")
+    write(repo, "tests/test_new.py", "def test_thing():\n    value = compute()\n")
+
+    found = rules(str(repo), "--scope", "branch", "--base", "main")
+    assert "swallowed-exception" in found, "the committed change must stay in scope"
+    assert "test-without-assertion" in found, \
+        "the untracked new test carries a P1 and must not be invisible"
+
+
+def test_branch_scope_label_stays_parseable_with_untracked_files(repo):
+    """SKILL.md's Step 3 builder recovers the base ref with
+    `${SRC#branch vs }` and hands it to `git merge-base`. Appending an
+    untracked count to the label would make that expand to a ref that does not
+    exist, and the review input would be built from an empty diff - so the
+    label is pinned even though the scope behind it widened."""
+    git(repo, "checkout", "-qb", "feat")
+    write(repo, "src.py", "def f():\n    dead = 1\n    return 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "work")
+    write(repo, "scratch.py", "def g():\n    unused = 3\n    return 4\n")
+
+    data = json.loads(run(str(repo), "--json", "--scope", "branch",
+                          "--base", "main").stdout)
+    assert data["scope"] == "branch vs main", data["scope"]
+
+
 def test_staged_file_does_not_eclipse_unstaged_work(repo):
     """Stop-at-first-non-empty reviewed the staged fraction and claimed the
     branch was covered."""
@@ -565,6 +607,171 @@ def test_since_on_json_that_is_not_a_report_does_not_crash(tmp_path):
     data = json.loads(proc.stdout)
     assert data["warnings"]
     assert "dead-local" in {f["rule"] for f in data["findings"]}
+
+
+def test_whole_files_baseline_does_not_resolve_untouched_findings(repo):
+    """The same defect as the severity-filter one above, one filter earlier.
+
+    The preexisting filter runs while the report is being assembled, so it sat
+    ahead of reconciliation and the held-back findings looked *gone*. SKILL.md
+    Step 4 writes a `--whole-files` scan as `<stem>-preexisting.json`, and its
+    own baseline-picker can hand that file straight to the next run's
+    `--since` - so an untouched-line P1 came back under 'no longer true' while
+    sitting unchanged on disk. Out-of-scope and fixed are different facts.
+    """
+    write(repo, "a.py", "def old():\n    try:\n        pass\n"
+                        "    except Exception:\n        pass\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    write(repo, "a.py", "def old():\n    try:\n        pass\n"
+                        "    except Exception:\n        pass\n"
+                        "\ndef added():\n    return 1\n")
+
+    first = json.loads(run(str(repo), "--json", "--whole-files").stdout)
+    assert "swallowed-exception" in {f["rule"] for f in first["findings"]}
+    (repo / "prior.json").write_text(json.dumps(first), encoding="utf-8")
+
+    second = json.loads(run(str(repo), "--json",
+                            "--since", str(repo / "prior.json")).stdout)
+    assert second["resolved"] == [], (
+        "a.py:4 is untouched and still true; reporting it resolved tells the "
+        "reviewer a live P1 was fixed: "
+        + repr([(f["path"], f["line"], f["rule"]) for f in second["resolved"]]))
+
+
+def test_a_genuinely_fixed_untouched_line_is_still_reported_resolved(repo):
+    """The control for the test above, and the reason it is not just
+    `resolved == []` everywhere. Holding preexisting findings back from the
+    report must not hide them from reconciliation in the other direction: once
+    the line is actually repaired, it has to show up as resolved."""
+    write(repo, "a.py", "def old():\n    try:\n        pass\n"
+                        "    except Exception:\n        pass\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    write(repo, "a.py", "def old():\n    try:\n        pass\n"
+                        "    except Exception:\n        pass\n"
+                        "\ndef added():\n    return 1\n")
+    first = json.loads(run(str(repo), "--json", "--whole-files").stdout)
+    (repo / "prior.json").write_text(json.dumps(first), encoding="utf-8")
+
+    write(repo, "a.py", "def old():\n    try:\n        pass\n"
+                        "    except ValueError:\n        raise\n"
+                        "\ndef added():\n    return 1\n")
+    second = json.loads(run(str(repo), "--json", "--whole-files",
+                            "--since", str(repo / "prior.json")).stdout)
+    assert "swallowed-exception" in {f["rule"] for f in second["resolved"]}
+
+
+@pytest.mark.parametrize("flag, entry", [
+    # `finding_key` reads path, rule AND message; both guards checked two of
+    # the three. SKILL.md tells the user to maintain declined.json by hand, so
+    # a partial entry is an expected input, not a malformed one.
+    ("--declined", {"path": "a.py", "rule": "dead-local", "line": 2}),
+    ("--since", {"path": "a.py", "rule": "dead-local", "line": 2}),
+    # `--since` echoes matched entries into `resolved`, which the text printer
+    # reads `severity` and `line` off. Missing severity survived the severity
+    # filter via .get(..., 0) and then died in the printer - a crash only in
+    # text mode, which the JSON tests would never have caught.
+    ("--since", {"path": "zz.py", "rule": "dead-local", "message": "x",
+                 "anchor": "q = 1", "line": 9}),
+])
+def test_a_partial_prior_entry_is_a_warning_not_a_crash(tmp_path, flag, entry):
+    """Exit 1 with empty stdout is the worst available failure here: under
+    --json the consumer gets a traceback where it was promised a report."""
+    write(tmp_path, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    write(tmp_path, "p.json", json.dumps({"findings": [entry]}))
+    proc = run(str(tmp_path), "--json", "--paths", "a.py",
+               flag, str(tmp_path / "p.json"))
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert any("malformed" in w for w in data["warnings"]), data["warnings"]
+    assert "dead-local" in {f["rule"] for f in data["findings"]}, \
+        "the run must still report its findings, not lose them to a bad entry"
+
+
+def test_a_partial_prior_entry_does_not_crash_the_text_printer(tmp_path):
+    """The JSON path and the text path fail differently, so both are pinned:
+    this one died in `dump` reading `f['severity']` off an echoed entry."""
+    write(tmp_path, "a.py", "def f():\n    dead = 1\n    return 2\n")
+    write(tmp_path, "p.json", json.dumps({"findings": [
+        {"path": "zz.py", "rule": "dead-local", "message": "x", "line": 9}]}))
+    proc = run(str(tmp_path), "--paths", "a.py",
+               "--since", str(tmp_path / "p.json"))
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "dead-local" in proc.stdout
+
+
+def test_auto_on_a_dirty_branch_warns_that_commits_are_out_of_scope(repo):
+    """`auto` reviews uncommitted work whenever the tree is dirty, so the
+    shape of this skill's headline case - an agent wrote a feature, committed
+    it, and left edits on top - reviews the edits and not the feature. That
+    reading of `auto` is deliberate; going silent about the commits was not,
+    and README lists "about to open a PR", which is branch-shaped."""
+    git(repo, "checkout", "-qb", "feat")
+    write(repo, "committed.py", "def f():\n    dead = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "agent work")
+    write(repo, "dirty.py", "def g():\n    unused = 2\n")
+
+    data = json.loads(run(str(repo), "--json").stdout)
+    assert data["scope"].startswith("uncommitted work")
+    assert any("ahead of" in w and "NOT being reviewed" in w
+               for w in data["warnings"]), data["warnings"]
+
+
+def test_a_clean_tree_branch_review_does_not_warn_about_commits(repo):
+    """The warning must not fire when the commits ARE being reviewed -
+    otherwise it is noise on the correct path, and noise is what teaches a
+    reader to skip the `warnings` array the integrity check depends on."""
+    git(repo, "checkout", "-qb", "feat")
+    write(repo, "committed.py", "def f():\n    dead = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "agent work")
+
+    data = json.loads(run(str(repo), "--json").stdout)
+    assert data["scope"].startswith("branch vs")
+    assert not any("NOT being reviewed" in w for w in data["warnings"]), \
+        data["warnings"]
+
+
+def test_a_finding_whose_file_left_scope_is_not_reported_resolved(repo):
+    """Winnow, commit part of it, winnow again with a still-dirty tree: the
+    committed file drops out of worktree scope, is never opened, and its live
+    findings came back as 'no longer true'. Nothing was learned about a file
+    that was not read, so the honest answer is `out_of_scope`, not `resolved`.
+    """
+    write(repo, "keep.py", "def f():\n    dead = 1\n")
+    first = json.loads(run(str(repo), "--json").stdout)
+    assert "dead-local" in {f["rule"] for f in first["findings"]}
+    (repo / "prior.json").write_text(json.dumps(first), encoding="utf-8")
+
+    git(repo, "add", "keep.py")
+    git(repo, "commit", "-qm", "commit it unfixed")
+    write(repo, "other.py", "def g():\n    unused = 2\n")   # keep tree dirty
+
+    second = json.loads(run(str(repo), "--json",
+                            "--since", str(repo / "prior.json")).stdout)
+    assert second["resolved"] == [], (
+        "keep.py:2 is unchanged on disk and was never opened this run; "
+        "calling it resolved claims a fix that did not happen: "
+        + repr(second["resolved"]))
+    assert "dead-local" in {f["rule"] for f in second["out_of_scope"]}
+
+
+def test_a_finding_in_a_scanned_file_is_still_reported_resolved(repo):
+    """The control. `out_of_scope` must not become a bucket that swallows real
+    resolutions - a finding whose file WAS read this run and is gone is
+    genuinely fixed, and has to keep saying so."""
+    write(repo, "keep.py", "def f():\n    dead = 1\n")
+    first = json.loads(run(str(repo), "--json").stdout)
+    (repo / "prior.json").write_text(json.dumps(first), encoding="utf-8")
+
+    write(repo, "keep.py", "def f():\n    return 1\n")      # actually fixed
+    second = json.loads(run(str(repo), "--json",
+                            "--since", str(repo / "prior.json")).stdout)
+    assert "dead-local" in {f["rule"] for f in second["resolved"]}
+    assert second["out_of_scope"] == []
 
 
 def test_report_name_under_json_emits_json(tmp_path):

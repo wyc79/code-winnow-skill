@@ -238,6 +238,92 @@ def test_step1_and_step2_run_in_separate_shells_and_produce_a_stem(repo):
 
 
 @requires_bash
+def test_step2_surfaces_a_refusal_instead_of_the_empty_scope_advice(repo):
+    """A refusal yields no stem, so the no-stem guard used to fire and print
+    over it - three causes, none of them 'the scanner refused', led by 'pass
+    --base <ref>'. Step 1 says in so many words not to retry with another flag
+    to get past a refusal, and the guard was recommending exactly that, at
+    exit 0. The refusal has to reach the agent intact and the run has to stop.
+    """
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo))
+    subs = {"<absolute path to this skill's directory>": WINNOW,
+            'SCOPE=""': 'SCOPE="--scope staged"'}
+    # Stage a file, then edit it again: the one case the scanner refuses.
+    (repo / "staged.py").write_text("def f():\n    d = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "staged.py"], cwd=repo, capture_output=True)
+    (repo / "staged.py").write_text("def f():\n    d = 1\n# edited after\n",
+                                    encoding="utf-8")
+
+    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    both = p.stdout + p.stderr
+    assert "REFUSING:" in both, "the refusal was swallowed:\n" + both
+    assert p.returncode != 0, "a refusal must stop the run, not exit 0"
+    assert "pass --base <ref> to name" not in p.stdout, (
+        "the no-stem guard printed its empty-scope advice over a refusal, "
+        "pointing the agent at the retry Step 1 forbids:\n" + both)
+
+
+@requires_bash
+def test_review_input_never_contains_an_untracked_binary(repo):
+    """`cat` on every untracked file put a 230 KB PNG into the review input:
+    not valid UTF-8, and the `-s` guard passed because the file was large.
+    New art, prefabs and .meta files are the normal content of a Unity or UE5
+    change, so this is the default case, not an edge one. Excluded paths must
+    still be NAMED - an omission the agent cannot see is the same silent-
+    coverage failure the scanner's `errors` array exists to prevent."""
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo))
+    subs = {"<absolute path to this skill's directory>": WINNOW}
+    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
+    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+
+    art = repo / "Assets" / "Art"
+    art.mkdir(parents=True)
+    (art / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 900)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "dep.js").write_text("module.exports=1\n",
+                                                  encoding="utf-8")
+
+    p = run_block(_find_block("Ask the scanner what it actually reviewed")[2],
+                  str(repo))
+    assert p.returncode == 0, p.stdout + p.stderr
+    stem = re.search(r"STEM=(\S+)",
+                     (repo / ".code-winnow" / "env.sh").read_text(
+                         encoding="utf-8")).group(1).strip("'\"")
+    raw = (repo / ".code-winnow" / f"{stem}.input.diff").read_bytes()
+    assert b"\x00" not in raw, "the review input carries NUL bytes"
+    raw.decode("utf-8")           # must not raise
+    text = raw.decode("utf-8")
+    assert "icon.png" in text, "an excluded file must still be named"
+    assert "not shown" in text
+    assert "dep.js" in text and "vendored" in text
+
+
+@requires_bash
+def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path):
+    """`Backup:` once ended in a `(NOT YET MADE)` marker. Copied into $BACKUP
+    it made a real directory of that name nested inside the intended one, the
+    script printed its usual success count, the non-empty refusal never fired
+    because the intended path was still empty, and `Undo:` restored nothing."""
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo))
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    stem = "currentmain_worktree_20260803-1200"
+    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
+        f"# Fix plan\n\nStatus:   APPROVED by the user on 2026-08-03\n\n"
+        "## Code fixes — approved\n\n"
+        "- [ ] P1 thing\n      file:     src/a.py\n"
+        "      anchor:   x = 1\n      evidence: rewrite, nothing removed\n",
+        encoding="utf-8")
+    body = _find_block("REFUSING: fix items appear after")[2]
+    poisoned = f".code-winnow/{stem}.pre-fix/  (NOT YET MADE)"
+    p = run_block(f'STEM={stem}\nBACKUP={poisoned!r}\n' + body, str(repo))
+    both = p.stdout + p.stderr
+    assert "REFUSING:" in both, both
+    assert not list((repo / ".code-winnow").glob("**/*NOT YET*")), \
+        "a directory was created from the header's parenthetical"
+
+
+@requires_bash
 def test_env_sh_actually_restores_state_in_a_fresh_shell(repo):
     run_block(_find_block("EXCLUSION FAILED")[2], str(repo))
     subs = {"<absolute path to this skill's directory>": WINNOW}

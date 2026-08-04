@@ -113,6 +113,8 @@ The scanner also hard-skips its own workspace directory, so a run started before
 
 Let the scanner do it. `--scope auto` (the default) takes the **union of all uncommitted work**: staged, unstaged, and untracked files. If the working tree is clean it falls back to the branch diff against a discovered base.
 
+**On a branch with commits *and* a dirty tree, `auto` reviews the uncommitted work only** — the fallback to the branch diff happens when the tree is clean, not otherwise. That is the intended reading, and it is also the shape of this skill's headline case: an agent wrote a feature, committed it, and left a few edits on top. The scanner now puts the gap in `warnings` (`this branch is N commit(s) ahead of 'main' - that work is NOT being reviewed`), so the four-field check below catches it. **When you see that warning, ask** — "your branch has 3 commits I am not reviewing; want the whole branch (`--scope branch`) or just the uncommitted work?" It is one question and the two answers review different code.
+
 **On the base branch itself, that fallback is correctly empty** — `main` diffed against `main` is nothing, so a clean tree on `main` yields no stem and no scope. That is not a broken setup and not a clean bill of health; it means you have to say what to compare against. Pass `--base <ref>`, or name the commit the work started from. This is the first thing to check when a run reports nothing, because it looks exactly like a clean tree from every field in the output.
 
 ```bash
@@ -366,15 +368,34 @@ done
 [ -n "$PY" ] || { echo "no working Python on PATH — set PY to its absolute path:"
                   echo "  PY=/c/Users/me/miniconda3/python.exe"; exit 1; }
 
-STEM=$("$PY" "$WINNOW/scripts/scan.py" $SCOPE --report-name) || STEM=""
-[ -n "$STEM" ] || {
+# Keep stderr. A REFUSAL arrives there and also yields no stem, so a guard
+# that only knows about empty scopes overwrites the one message that explains
+# what happened — and then tells you to retry with --base, which Step 1 says
+# explicitly not to do.
+ERRF=$(mktemp)
+STEM=$("$PY" "$WINNOW/scripts/scan.py" $SCOPE --report-name 2>"$ERRF") || STEM=""
+if [ -z "$STEM" ]; then
+  cat "$ERRF" >&2
+  if grep -q '^REFUSING:' "$ERRF"; then
+    rm -f "$ERRF"
+    echo "" >&2
+    echo "That is a refusal, not an empty scope. It is a question for the" >&2
+    echo "user — see Step 1. Do NOT retry with a different --scope or --base" >&2
+    echo "to get past it: the available answers review different code, and" >&2
+    echo "picking one silently is the failure the refusal exists to prevent." >&2
+    exit 1
+  fi
+  rm -f "$ERRF"
   echo "no stem. Three causes, in the order they actually happen:"
   echo "  1. the tree is clean AND you are on the base branch, so auto's"
   echo "     branch fallback has nothing to diff — pass --base <ref> to name"
   echo "     what to compare against. \`git branch --show-current\` tells you."
   echo "  2. the scope really is empty — nothing to review."
   echo "  3. \$PY or \$WINNOW is wrong."
-  echo "Check 1 first; it looks identical to a clean tree and is not."; exit 0; }
+  echo "Check 1 first; it looks identical to a clean tree and is not."
+  exit 0
+fi
+rm -f "$ERRF"
 
 # Archive the previous run before this one writes anything. Every dated
 # artifact whose stem is not $STEM moves into the next round-NN/ folder, so the
@@ -484,22 +505,40 @@ case "$SRC" in
   *)       RANGE="" ;;
 esac
 
+# Emit every untracked file the agents should actually read, and NAME the ones
+# they should not. `cat` on an untracked binary is the failure this exists for:
+# one new PNG turns the review input into 230 KB of undecodable bytes, the -s
+# check passes because the file is large, and five agents are handed it.
+emit_untracked() {
+  git ls-files --others --exclude-standard -z |
+    while IFS= read -r -d '' f; do
+      case "$f" in
+        .code-winnow/*) continue ;;
+        */node_modules/*|node_modules/*|*/__pycache__/*|*/vendor/*|vendor/*) \
+          printf '\n--- NEW FILE (vendored, not shown): %s ---\n' "$f"; continue ;;
+        *.min.js|*.min.css|*.map|*.lock) \
+          printf '\n--- NEW FILE (generated, not shown): %s ---\n' "$f"; continue ;;
+      esac
+      # -I is "treat binary as non-matching", so this is true only for text.
+      if ! LC_ALL=C grep -qI . "$f" 2>/dev/null; then
+        printf '\n--- NEW FILE (binary or empty, not shown): %s ---\n' "$f"
+        continue
+      fi
+      if [ "$(wc -c < "$f")" -gt 524288 ]; then
+        printf '\n--- NEW FILE (over 512 KiB, not shown): %s ---\n' "$f"
+        continue
+      fi
+      printf '\n--- NEW FILE: %s ---\n' "$f"; cat "$f"
+    done
+}
+
 {
   if [ -n "$RANGE" ]; then
     git diff "$RANGE"                                # base..worktree
-    git ls-files --others --exclude-standard -z |
-      while IFS= read -r -d '' f; do
-        case "$f" in .code-winnow/*) continue ;; esac
-        printf '\n--- NEW FILE: %s ---\n' "$f"; cat "$f"
-      done
   else
     git diff HEAD 2>/dev/null || git diff --cached   # unborn HEAD: no commit yet
-    git ls-files --others --exclude-standard -z |
-      while IFS= read -r -d '' f; do
-        case "$f" in .code-winnow/*) continue ;; esac
-        printf '\n--- NEW FILE: %s ---\n' "$f"; cat "$f"
-      done
   fi
+  emit_untracked
 } > ".code-winnow/$STEM.input.diff"
 
 [ -s ".code-winnow/$STEM.input.diff" ] || {
@@ -525,6 +564,8 @@ Three further guards in that block, all against the same silent-empty failure:
 **The `|| git diff --cached` fallback.** On a repo with staged files and no commit yet, `git diff HEAD` is fatal — there is no `HEAD` to diff against — but the `{ }` group still exits 0 and the redirect still creates an empty file. That state is a fresh repo mid-first-commit, and "clean this up before I commit" is this skill's headline trigger.
 
 **Skipping `.code-winnow/`.** The scanner hard-skips its own workspace, but this builder is a separate path and it is the half that reaches an agent. If Step 0's exclusion ever fails, `ls-files --others` sweeps in your own reports and the pre-fix backups of the source you just cleaned, and presents them to the judgment agents as new-file content.
+
+**Naming what it did not include, rather than dropping it.** The scanner has a vendor filter, a size cap and a binary check; this builder is a separate path and had none of them, so it `cat`-ed whatever `ls-files --others` returned. One untracked PNG — a new sprite, a prefab, a `.meta` file, which in a Unity or UE5 repo is the *normal* content of a change — produced a 230 KB review input that was not valid UTF-8, and the `-s` check passed because the file was large. Every excluded path still gets a `NEW FILE (…, not shown)` line, because an omission an agent cannot see is the same silent-coverage failure the scanner's `errors` array exists to prevent. If an agent needs one of those files it can open it; what it must not do is read a report that never mentioned it.
 
 To cross-check which files are in scope, use `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`. **Not the scanner JSON** — it carries a `files` *count*, not a path list, and `findings[].path` only names files that produced a finding, so every clean file in scope silently vanishes from such a check.
 
@@ -789,11 +830,15 @@ Find the most recent scanner JSON for the same scope and pass it to `--since`. *
 ls -1t .code-winnow/round-*/*.json 2>/dev/null | grep -v -- '-postfix\|-p3\|-r2' | head -1
 ```
 
-Exclude `$STEM.json`, which this run wrote minutes ago, and the derived `-postfix` outputs, which are reconciliation results rather than baselines.
+Exclude `$STEM.json`, which this run wrote minutes ago, and the derived `-postfix`, `-vs-` and `-preexisting` outputs, which are reconciliation results or widened scans rather than baselines. **Check the stem's scope segment matches too** — `_worktree_` against `_worktree_`, `_target<base>_` against the same base. A stem carries its scope precisely so this comparison can be made, and `ls -1t` alone does not make it.
 
 That exclusion is not pedantry. Step 2 writes the baseline before the agents are dispatched, so by Step 4 it *is* the newest JSON for this scope — reconcile against it and every finding comes back `persisting`, `resolved` is empty, and the report names this run as its own previous run. Write the reconciled output to `.code-winnow/$STEM-vs-<prior stem>.json`; never back over `$STEM.json`, which Step 6 still needs as the pre-fix baseline. If no earlier run exists, say "Previous run: none" and skip `--since` entirely. The scanner marks each live finding `new` or `persisting`, and returns the ones present last time and absent now in `resolved`. Matching is by file, rule, message, and the normalised source line, so several instances of the same rule in one file stay distinguishable and survive the line shifts that deleting other findings causes.
 
 Findings present before and absent now are **no longer true** — fixed, refactored away, or overtaken by events. Report them under their own heading and never re-list them as live. A punch list that keeps resurfacing settled items stops being read, and that failure is quiet: the user does not tell you they have started skimming.
+
+**A finding whose file this run never opened is `out_of_scope`, not `resolved`.** The scanner records every path it actually read, so a prior finding in a file that left the scope — committed since the last run, or simply outside a narrower one — lands in its own array and its own report section, saying the true thing: not examined. The flow that produced the false claim is the ordinary one — winnow, commit part of it, winnow again while the tree is still dirty, and the committed file's live P1s came back as "no longer true". Report that section as unexamined and never fold it into the resolved list; if the user wants those answered, the scope has to include them.
+
+**"Absent" means gone, not merely unprinted**, and the scanner enforces the distinction so a mismatched baseline cannot manufacture resolutions. A finding this report filters out but that is still true — a pre-existing one on an untouched line, on a run without `--whole-files` — is counted during reconciliation and then dropped from the output: it appears as neither live nor resolved, because "out of this report's scope" and "fixed" are different facts and only the second is news. Declined findings are handled the same way and for the same reason.
 
 ### Findings the user declined
 
@@ -853,6 +898,9 @@ Previous run: <prior stem, or "none">
 
 ### No longer true since <prior report>
 - <finding> — resolved
+
+### In the prior report, not looked at this run  (omit when none)
+- <finding> — its file was not in this run's scope; unexamined, not fixed
 
 ### Previously declined
 - <finding> — raised <date>, declined
@@ -1025,7 +1073,7 @@ Scope:    12 files in diff, 3 in feature "dash cooldown"
 Feature:  "winnow the dash cooldown work" — the user's own words, confirmed to mean
           src/Dash.cs, src/DashConfig.cs, src/PlayerInput.cs
 Baseline: .code-winnow/currentfeature-dash_targetmain_20260802-2028.json
-Backup:   .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/  (NOT YET MADE)
+Backup:   .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/
 Undo:     cp -a .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/. .
 Verify:   dotnet test
 Tests-before: (filled in by Step 5a, before the first edit)
@@ -1230,6 +1278,16 @@ ITEM = re.compile(r"(?m)^\s*-\s*\[.\]\s")
 if len(ITEM.findall(whole)) != len(ITEM.findall(plan)):
     sys.exit("REFUSING: fix items appear after '## Never touch'. Move them "
              "above it so they are backed up.")
+
+# A destination copied out of the plan header rather than computed. The
+# header is prose: `Backup: <path>  (NOT YET MADE)` pasted into $BACKUP made
+# a real directory called "  (NOT YET MADE)" inside the intended one, printed
+# the usual success line, and left `Undo:` pointing at an empty directory.
+if re.search(r"\(|\s{2,}", dest):
+    sys.exit(f"REFUSING: backup destination {dest!r} contains a parenthetical "
+             "or a run of spaces, so it was pasted from the plan header "
+             "instead of computed. Use .code-winnow/<stem>.pre-fix, where "
+             "<stem> is the plan's filename minus `.fixplan.md`.")
 
 if os.path.isdir(dest) and os.listdir(dest):
     sys.exit(f"REFUSING: {dest} exists and is not empty. A second Step 5a "
@@ -1440,7 +1498,9 @@ You were invoked with a fix plan rather than a review request — `code-winnow: 
 1. Read the fix plan. It is self-contained: `Status`, `Skill` (your `$WINNOW`), `Scope`, `Feature`, `Baseline` (the pre-fix JSON for Step 6), `Backup`, `Undo`, `Verify`, then the fixes and the never-touch list. Each fix carries `file:`, `line:`, `occurrence:`, `of:`, `anchor:`, `fix:` and `evidence:` — **all five of the first are what locate the edit**, and the rules for using them are in Step 4b under "Locating a fix at execution time". Read that section; it is the one part of the review you do inherit. **`$STEM` is the plan's filename minus `.fixplan.md`.**
 2. Re-run the Step 0 block. It is idempotent and it verifies with `git check-ignore` — cheap insurance against a repo where the exclusion was lost or was never valid, which in a linked worktree it silently was not. This is the one part of Steps 0–4b you *do* run.
 
-   Then look at `.code-winnow/env.sh` before running anything that sources it. **It is from the session that wrote the plan, and it may name a different `$STEM`** — a later review in the same repo overwrites it, and a plan copied to another machine has none at all. Every block below opens with `. .code-winnow/env.sh`, so a stale file silently redirects the backup and the reconciliation to another run's filenames. If its `STEM` does not match the plan's own name, or the file is missing, set `WINNOW`, `PY`, `STEM` and `BACKUP` yourself at the top of each call: the plan's header carries `Skill:` and `Backup:`, and `STEM` is its filename minus `.fixplan.md`.
+   Then look at `.code-winnow/env.sh` before running anything that sources it. **It is from the session that wrote the plan, and it may name a different `$STEM`** — a later review in the same repo overwrites it, and a plan copied to another machine has none at all. Every block below opens with `. .code-winnow/env.sh`, so a stale file silently redirects the backup and the reconciliation to another run's filenames. If its `STEM` does not match the plan's own name, or the file is missing, set `WINNOW`, `PY`, `STEM` and `BACKUP` yourself at the top of each call. **Derive them from the plan's filename, not by copying its header values:** `STEM` is the filename minus `.fixplan.md`, and `BACKUP` is `.code-winnow/$STEM.pre-fix`. The header's `Skill:` line is the one field to read directly, because nothing else carries `$WINNOW`.
+
+The plan header is prose written for a human, and a value copied out of it arrives with whatever else is on that line. `Backup:` once carried a trailing `(NOT YET MADE)` marker; pasted into `$BACKUP` it produced a real directory named <code>&nbsp;&nbsp;(NOT YET MADE)</code> nested inside the intended one, the backup script printed its usual success line, the non-empty-directory refusal never fired because the intended path was still empty, and the plan's own `Undo:` command then restored nothing. Step 5a now refuses a destination with a parenthetical in it, but the durable fix is to compute the path rather than parse it.
 3. Step 5a — the backup, from the plan's `file:` lines. Any `REFUSING:` line means stop and say so. Then run the `Verify:` command **before editing** and fill in `Tests-before:` yourself if the plan does not already carry it. A cold session inherits no memory of what was green, and Step 6 is a comparison against that number.
 4. Step 5b — the edits, located by normalised anchor, per the rules in Step 4b. No searching for moved anchors. **Any item that removes code and whose `evidence:` line reads `unverified` is skipped and reported, not applied** — and not researched. You have none of the context that decision was made in, which is the entire point of starting cold.
 5. Step 6 — verify, reconcile against `Baseline`, report approved / applied / skipped.
