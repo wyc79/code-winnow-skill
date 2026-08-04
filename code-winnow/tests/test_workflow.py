@@ -974,3 +974,72 @@ def test_report_format_requires_the_identity_block():
     assert "Compared:" in text, (
         "the filename no longer says what was reviewed, so the identity block "
         "has to be specified where the report's shape is specified")
+
+
+@requires_bash
+def test_step2_never_reuses_an_existing_round_number(repo):
+    """Numbering by COUNT rather than by highest existing number destroys an
+    approved plan, silently and with exit 0.
+
+    With round-01 and round-03 present the count is 2, so N is 03, `mkdir -p`
+    succeeds on the directory that is already there, and `cp -a` overwrites its
+    fixplan.md and notes.md with the blank template. Deleting one round folder
+    is enough to trigger it. Reproduced before the fix: a plan reading
+    "REAL PLAN, approved" came back as the template.
+
+    Stem-named files used to make a collision harmless, so this is a
+    protection the fixed-short-names layout removed rather than a defect it
+    inherited."""
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_find_block("# QUOTE IT")[2], str(repo), WINNOW_SUBS)
+
+    ws = repo / ".code-winnow"
+    (ws / "round-01").mkdir()
+    (ws / "round-03").mkdir()
+    plan = ws / "round-03" / "fixplan.md"
+    plan.write_text("REAL PLAN, approved\n", encoding="utf-8")
+
+    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo),
+                  WINNOW_SUBS)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+
+    assert plan.read_text(encoding="utf-8") == "REAL PLAN, approved\n", \
+        "an existing round's fix plan was overwritten by the scaffold template"
+    assert (ws / "round-04").is_dir(), \
+        f"expected round-04 after a gap; got {sorted(q.name for q in ws.glob('round-*'))}"
+
+
+@requires_bash
+def test_step2_round_number_survives_the_octal_trap(repo):
+    """`$(( 08 + 1 ))` is an invalid-octal error in bash, so a zero-padded
+    round number needs `10#`. Without it the ninth round of any repo aborts
+    Step 2 with 'value too great for base'."""
+    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_find_block("# QUOTE IT")[2], str(repo), WINNOW_SUBS)
+    (repo / ".code-winnow" / "round-08").mkdir()
+
+    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo),
+                  WINNOW_SUBS)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert (repo / ".code-winnow" / "round-09").is_dir(), \
+        f"{p.stdout}{p.stderr}"
+
+
+def test_skill_md_carries_no_lone_carriage_return():
+    r"""A `\r` written through a shell one-liner became a literal 0x0D inside
+    the PowerShell undo command, which rendered as
+    `'.code-winnowound-02\pre-fix\*'` - the only Windows recovery route in the
+    file, handed to the user right after their files were edited.
+
+    It survived every existing guard: the scanner's invisible-character set
+    excludes CR deliberately, and the harness only extracts ```bash blocks, so
+    a prose line was never executed or scanned. Nothing else in the document
+    should contain one either, which is why this checks the whole file."""
+    data = open(SKILL_MD, "rb").read()
+    lone = data.count(b"\x0d") - data.count(b"\x0d\x0a")
+    where = [i for i, line in enumerate(data.split(b"\n"), 1)
+             if b"\x0d" in line.rstrip(b"\x0d")]
+    assert lone == 0, (
+        f"{lone} lone carriage return(s) in SKILL.md, on line(s) {where}. "
+        "A backslash escape was interpreted somewhere it should have stayed "
+        "literal - check any shell or Python one-liner that wrote this text.")

@@ -417,9 +417,25 @@ rm -f "$ERRF"
 # artifacts to begin with. Creating it HERE and not in Step 0 is deliberate:
 # cold entry at Step 5 re-runs Step 0, and creating a round there would orphan
 # the fix plan the cold session was invoked to execute.
-N=$(printf '%02d' $(( $(ls -d .code-winnow/round-* 2>/dev/null | wc -l) + 1 )))
+#
+# The HIGHEST existing round number, never the count. With round-01 and
+# round-03 present a count yields 03, `mkdir -p` succeeds on the directory that
+# is already there, `cp -a` overwrites its fixplan.md and notes.md with the
+# blank template, and the whole thing exits 0 with no output. Deleting one
+# round folder is enough to destroy an approved plan in another. `sort -n`
+# after discarding non-numeric suffixes, so legacy `round-01-scope-probe`
+# names neither count nor collide.
+LAST=$(ls -d .code-winnow/round-* 2>/dev/null | sed 's|.*/round-||' \
+       | grep -E '^[0-9]+$' | sort -n | tail -1)
+N=$(printf '%02d' $(( 10#${LAST:-0} + 1 )))
 ROUND=".code-winnow/round-$N"
-mkdir -p "$ROUND"
+
+# Plain `mkdir`, not `mkdir -p`: it must FAIL if the directory exists. That is
+# the backstop for any numbering mistake, and it is the difference between a
+# loud stop and a silently blanked plan.
+mkdir "$ROUND" || { echo "REFUSING: $ROUND already exists — numbering is wrong,"
+                    echo "and continuing would overwrite that round. Stop here."
+                    exit 1; }
 cp -a "$WINNOW/scaffold/round/." "$ROUND/"
 echo "this run is round-$N"
 
@@ -556,6 +572,8 @@ To cross-check which files are in scope, use `git diff --name-only HEAD` and `gi
 Dispatch the agents **in parallel** (see `superpowers:dispatching-parallel-agents`). Give each only that input file, the baseline scanner JSON from Step 2, and the reference files. **No conversation history, no design rationale, no mention of who wrote the code.**
 
 **The prompts are in `$WINNOW/references/agent-prompts.md`.** Read it before dispatching and copy each prompt from there. It also holds the two blocks every Step 3 prompt carries verbatim — the staleness precondition and, when a feature was named, the scope rule. **Expand `$WINNOW` to its real value in every prompt**: a subagent's cwd is the repo, it has no `$WINNOW`, and an agent that cannot open the reference files still returns findings — they are just findings from no standard at all.
+
+**Subagents may run on a cheaper model than yours; you may not.** If the runtime lets you pick a model per agent, the volume passes are the ones to tier down — A and B read a written standard and apply it to many lines, which is what a mid-tier model is good at. **Keep S and E at your own tier**, and stay there yourself. `$WINNOW/references/portability.md` has the table and the reasoning; the short version is that S decides what is *eligible* to be reviewed and E's veto is the only thing standing between a confident deletion and a silent runtime break, so both are the passes where a weaker reader fails invisibly. If the runtime offers no choice, this paragraph costs nothing — ignore it.
 
 **Division of labour, so their outputs merge cleanly — one agent, one question.** **Agent S** ran already: it drew the feature boundary in Step 1 and is finished before any of these start.
 
@@ -942,7 +960,7 @@ Nor should you reason that a tracked file is safe because git can restore it. Th
 
 Then tell the user, in one line, where the copies are and how to undo:
 
-> Backed up 7 files to `.code-winnow/round-02/pre-fix/`. To undo everything, from the repo root: `cp -a .code-winnow/round-02/pre-fix/. .` (PowerShell: `Copy-Item -Recurse -Force '.code-winnowound-02\pre-fix\*' .`)
+> Backed up 7 files to `.code-winnow/round-02/pre-fix/`. To undo everything, from the repo root: `cp -a .code-winnow/round-02/pre-fix/. .` (PowerShell: `Copy-Item -Recurse -Force '.code-winnow\round-02\pre-fix\*' .`)
 
 If the copy fails — read-only filesystem, no shell — **say so and stop.** Do not edit anyway. A cleanup that cannot be undone is not a cleanup the user agreed to, and "I could not make a backup" is a decision for them, not for you.
 

@@ -19,7 +19,8 @@ Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
 Feature: <name> — <N> of <files> files          (omit when none was named)
 Passes: S scope, A chaff, B comments, C docs+headers, D performance, E silent-failure
         (say which ran; if C or D was skipped, why; if S was self-drawn rather than
-        dispatched, say that too)
+        dispatched, say that too; and if any pass ran on a smaller model than the
+        supervisor, name it — a reader judging a thin result needs to know)
 Scope appeals: <n> — listed below, unresolved   (omit when none)
 Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded,
         <n> deletions vetoed by E, <n> perf notes dropped

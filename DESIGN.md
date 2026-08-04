@@ -180,6 +180,30 @@ Step 1 says explicitly not to do.
 Step 0, and creating a round there would orphan the fix plan the cold session was
 invoked to execute.
 
+**Why the round number is the highest existing one and not the count, and why `mkdir`
+has no `-p`.** With `round-01` and `round-03` present, a count yields `03`; `mkdir -p`
+then succeeds on the directory that is already there, `cp -a` overwrites its
+`fixplan.md` and `notes.md` with the blank template, and the run exits 0 with no output.
+Deleting a single round folder is enough to destroy an approved plan in another one.
+Counting was harmless while filenames carried the stem — a collision wrote different
+names into the same directory — so fixed short names turned a benign count into a
+destructive one. That is a protection the layout change *removed*, not one it inherited.
+`sort -n` runs after non-numeric suffixes are discarded, so a legacy
+`round-01-scope-probe` neither counts nor collides; `10#` forces base ten, because
+`$(( 08 + 1 ))` is an invalid-octal error in bash and would abort the ninth round of any
+repo. The bare `mkdir` is the backstop: it fails loudly if the number is ever wrong
+again. Found by running the skill on its own branch.
+
+**Why a test asserts SKILL.md contains no lone carriage return.** A `\r` written through
+a shell one-liner became a literal `0x0D` inside the PowerShell undo command, which
+rendered as `'.code-winnowound-02\pre-fix\*'` — the only Windows recovery route in the
+document, handed to the user immediately after their files were edited. It passed every
+guard: the scanner's invisible-character set excludes CR deliberately, and the test
+harness only extracts ```bash blocks, so a prose line is neither executed nor scanned.
+The tell was that Python warned about `\c` and `\p` in the same string and said nothing
+about `\r` — **the invalid escapes were the harmless ones, and the valid escape was the
+bug.** Write text containing backslashes from a script file, not from `python -c`.
+
 **Why `declined.json` and `perf-declined.md` survive.** They used to survive because the
 archive glob matched `current*` and neither name started with it — an accident that a
 rename would have quietly undone, turning every settled answer back into an open

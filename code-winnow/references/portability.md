@@ -56,6 +56,46 @@ One carve-out, and it is narrow. `code-winnow: apply <plan>.fixplan.md` **is** S
 | A simplification skill | Listed in available skills | Note residual complexity as a P2 finding instead of restructuring it. | Sometimes — see below |
 | Shell / file writes | Try it | Ask the user to run `scan.py` and paste the output; report inline instead of writing `.code-winnow/`. **No writes means no backup and no fix plan, which means no edits** — end at the report. | No |
 
+## Model tiers — spend the capable model where it decides something
+
+Some runtimes let the dispatcher choose a model per subagent. Where that exists, the
+supervisor stays on the strongest model available and most of the subagents do not need
+to. This is an optimisation, not a requirement: a runtime with one model runs every pass
+on it and nothing here changes.
+
+**The supervisor is never tiered down.** Step 3.5 arbitrates ten conflict classes and
+grades comment evidence against a four-bucket rule where two of the buckets exist
+precisely because the obvious reading is wrong. Step 6's deletion-safety pass is the only
+check in the run that looks at what is *gone*. Both are judgment over other agents'
+output, which is the work that most rewards a capable reader.
+
+| Pass | Tier | Why |
+|---|---|---|
+| **S** — scope | **Supervisor's tier** | It decides what is *eligible* to be judged, which decides more than any verdict does. A boundary drawn one file narrow is invisible in the output: the file is simply never reviewed, by anyone, and nothing says so |
+| **A** — chaff | Mid | High volume, and it applies a written standard to many lines. `core-patterns.md` carries the judgment; A applies it |
+| **B** — comments and docstrings | Mid | The highest-volume pass in the skill, and the most mechanical: read a comment, decide whether it says anything the code does not |
+| **C** — doc and header truth | Mid | Mostly lookup — does this doc line still match that code line |
+| **D** — performance | Mid | Its gate is a frequency claim it must attach evidence to, and an unsupported note is dropped at Step 3.5 anyway |
+| **E** — silent failure | **Supervisor's tier** | Its veto is the only thing between a confident deletion and a runtime break no test catches, and it must *name the mechanism* rather than object. A weaker reader fails by not objecting, which looks exactly like agreement |
+| Step 4b rung 2 fix agent | Mid, or lower | It executes an approved list located by normalised anchor. The plan is the whole permission, `evidence:` is re-run before each edit, and the anchor rules refuse rather than search |
+
+**The asymmetry is what the table encodes.** A and B failing weakly produce a thinner
+report — you notice, because the findings are not there. S and E failing weakly produce a
+report that looks complete and is not, and neither failure leaves a trace. Spend the
+capable model where a miss is silent.
+
+**Do not hardcode model names in a run.** Ask the runtime what it offers and pick by
+tier, because published line-ups change faster than this file does. As of writing, the
+Claude tiers are Opus 5 for the supervisor, Sonnet 5 for the mid rows, and Haiku 4.5 for
+the fix executor; other vendors ship an equivalent three-way split under their own names.
+A name that has aged out is worse than no guidance, since it fails at dispatch rather
+than at review.
+
+**Say what you did.** If any pass ran on a different tier from the supervisor, put one
+line in the report header — the same reason the report already says when C or D was
+skipped, or when S was self-drawn. A reader deciding how much to trust a thin Agent B
+result needs to know it ran on a smaller model.
+
 ## The Step 4b ladder
 
 Three ways to apply an approved fix plan, in order of preference. All three read the same artifact, so the choice costs nothing to defer:
