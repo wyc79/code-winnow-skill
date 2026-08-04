@@ -27,10 +27,13 @@ fails silently in the version that lacks the guard:
    second Step 5a - a follow-up "also fix 7 and 8", or a rung-2 fix agent that
    re-ran the step - copies *post-fix* files over the originals and prints the
    same success line as a healthy first run.
-4. **Refuses a destination pasted from the plan header.** The header is prose:
-   `Backup: <path>  (NOT YET MADE)` pasted into the argument made a real
-   directory called "  (NOT YET MADE)" inside the intended one, printed the
-   usual success line, and left `Undo:` pointing at an empty directory.
+4. **Refuses a destination that is not the plan's sibling `pre-fix/`.** Two
+   ways that goes wrong. The header is prose: `Backup: <path>  (NOT YET MADE)`
+   pasted into the argument made a real directory called "  (NOT YET MADE)"
+   inside the intended one, printed the usual success line, and left `Undo:`
+   pointing at an empty directory. And a destination in a *different* round
+   silently separates a plan from its restore point, which is only discovered
+   when someone tries to undo.
 5. **Refuses on any missing file** instead of printing a note and continuing.
 6. **Resolves against the git toplevel.** With `os.getcwd()`, running from a
    subdirectory backs up nothing and exits 0.
@@ -75,14 +78,28 @@ def check_status(header):
                  "4b gate.")
 
 
-def check_dest_shape(dest):
-    """A destination computed, not parsed out of the plan's prose header."""
+def check_dest_shape(dest, plan_path):
+    """A destination computed from the plan's location, not parsed out of its
+    prose header and not pointed at another round.
+
+    Two failures, one check. The header is prose: `Backup: <path>  (NOT YET
+    MADE)` pasted into the argument once made a real directory of that name,
+    printed the usual success line, and left `Undo:` pointing at an empty
+    directory. And a restore point written into a different round than the plan
+    being executed silently separates a plan from its originals - which is only
+    discovered when someone tries to undo."""
     if re.search(r"\(|\s{2,}", dest):
         sys.exit(f"REFUSING: backup destination {dest!r} contains a "
                  "parenthetical or a run of spaces, so it was pasted from the "
-                 "plan header instead of computed. Use "
-                 ".code-winnow/<stem>.pre-fix, where <stem> is the plan's "
-                 "filename minus `.fixplan.md`.")
+                 "plan header instead of computed. Use the plan's sibling "
+                 "`pre-fix/` directory.")
+    want = os.path.join(os.path.dirname(plan_path), "pre-fix")
+    if os.path.abspath(dest) != os.path.abspath(want):
+        sys.exit(f"REFUSING: backup destination {dest!r} is not the plan's "
+                 f"sibling `pre-fix/`. The plan lives in "
+                 f"{os.path.dirname(plan_path)!r}, so the restore point is "
+                 f"{want!r}. Compute it from the plan's path; do not copy it "
+                 "out of the header.")
 
 
 def plan_paths(whole):
@@ -124,7 +141,7 @@ def main(argv):
     whole = open(plan_path, encoding="utf-8").read()
 
     check_status(whole.split("\n## ")[0])
-    check_dest_shape(dest)
+    check_dest_shape(dest, plan_path)
 
     if os.path.isdir(dest) and os.listdir(dest):
         sys.exit(f"REFUSING: {dest} exists and is not empty. A second Step 5a "

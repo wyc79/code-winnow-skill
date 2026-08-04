@@ -728,3 +728,81 @@ def test_baseline_json_exists_before_step_3_needs_it(repo):
     assert baseline.is_file(), "Step 2 must write the baseline JSON"
     data = json.loads(baseline.read_text(encoding="utf-8"))
     assert data["findings"], "baseline holds no findings for a repo with chaff"
+
+
+# --------------------------------------------------------------------------
+# backup.py - the destination is the plan's sibling
+# --------------------------------------------------------------------------
+
+def _plan_text():
+    return (
+        "# Fix plan\n\n"
+        "Status:   APPROVED by the user on 2026-08-03\n"
+        "Verify:   true\n\n"
+        "## Code fixes - approved\n\n"
+        "- [ ] P2 unused local\n"
+        "      file:     feature.py\n"
+        "      line:     1\n"
+        "      anchor:   x = 1\n"
+        "      fix:      delete it\n"
+        "      evidence: rewrite, nothing removed\n"
+    )
+
+
+def _plan_repo(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    (tmp_path / "feature.py").write_text("x = 1\n", encoding="utf-8")
+    rd = tmp_path / ".code-winnow" / "round-02"
+    rd.mkdir(parents=True)
+    (rd / "fixplan.md").write_text(_plan_text(), encoding="utf-8")
+    return rd
+
+
+def _backup(tmp_path, dest, plan):
+    return subprocess.run([sys.executable, BACKUP_PY, dest, str(plan)],
+                          capture_output=True, text=True, cwd=tmp_path)
+
+
+def test_backup_accepts_the_plans_sibling_pre_fix(tmp_path):
+    rd = _plan_repo(tmp_path)
+    p = _backup(tmp_path, ".code-winnow/round-02/pre-fix", rd / "fixplan.md")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (rd / "pre-fix" / "feature.py").is_file()
+
+
+def test_backup_refuses_a_destination_in_another_round(tmp_path):
+    """The plan and its restore point must not be able to drift apart. A
+    backup written into round-01 while round-02's plan is executed leaves
+    `Undo:` pointing at files that were never the originals - and that is only
+    discovered when someone tries to undo."""
+    rd = _plan_repo(tmp_path)
+    (tmp_path / ".code-winnow" / "round-01").mkdir()
+    p = _backup(tmp_path, ".code-winnow/round-01/pre-fix", rd / "fixplan.md")
+    assert p.returncode != 0
+    assert "REFUSING" in (p.stdout + p.stderr)
+
+
+def test_backup_refuses_a_destination_at_the_workspace_root(tmp_path):
+    rd = _plan_repo(tmp_path)
+    p = _backup(tmp_path, ".code-winnow/pre-fix", rd / "fixplan.md")
+    assert p.returncode != 0
+    assert "REFUSING" in (p.stdout + p.stderr)
+
+
+def test_backup_refuses_a_misspelled_sibling(tmp_path):
+    rd = _plan_repo(tmp_path)
+    p = _backup(tmp_path, ".code-winnow/round-02/prefix", rd / "fixplan.md")
+    assert p.returncode != 0
+    assert "REFUSING" in (p.stdout + p.stderr)
+
+
+def test_backup_still_refuses_a_destination_pasted_from_the_header(tmp_path):
+    """The original guard: `Backup: <path>  (NOT YET MADE)` pasted into the
+    argument made a real directory of that name and printed the usual success
+    line. It must keep firing, and with the clearer message of the two."""
+    rd = _plan_repo(tmp_path)
+    p = _backup(tmp_path, ".code-winnow/round-02/pre-fix  (NOT YET MADE)",
+                rd / "fixplan.md")
+    assert p.returncode != 0
+    out = p.stdout + p.stderr
+    assert "REFUSING" in out and "parenthetical" in out

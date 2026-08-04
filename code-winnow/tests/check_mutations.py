@@ -68,6 +68,14 @@ MUTATIONS = [
      '        if False:\n            continue\n',
      "meta_prior_round_matches_scope"),
 
+    # A restore point in a different round than the plan being executed leaves
+    # `Undo:` pointing at files that were never the originals, and nothing says
+    # so until someone tries to undo.
+    ("backup-dest-sibling", BACKUP,
+     "    if os.path.abspath(dest) != os.path.abspath(want):\n",
+     "    if False:\n",
+     "backup_refuses_a_destination_in_another_round"),
+
     # Numbering in arrival order instead of file order: ast.walk is
     # breadth-first, so a nested handler is numbered before a shallower one
     # written below it, and the executor counts anchors top-to-bottom.
@@ -290,7 +298,12 @@ def run(argv, cwd=None):
 
 
 # Everything this script breaks, it breaks inside a throwaway copy.
-COPY_DIRS = ("scripts", "tests", "references")
+#
+# `scaffold` is here because tests/ reads it. A directory the tests depend on
+# but the mirror does not carry fails every one of those tests inside the
+# mirror while passing in the real tree, and the harness reports it as a red
+# baseline rather than as the missing copy it is.
+COPY_DIRS = ("scripts", "tests", "references", "scaffold")
 COPY_FILES = ("SKILL.md",)
 
 
