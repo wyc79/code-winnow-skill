@@ -5,12 +5,15 @@ them are in SKILL.md; this file is the shapes.
 
 ## The condensed report — shown in chat
 
-`.code-winnow/<stem>.md` holds the full version. Omit any section that is empty rather
-than printing an empty heading.
+`.code-winnow/round-NN/report.md` holds the full version. Omit any section that is
+empty rather than printing an empty heading.
 
 ```
-## Winnow report
+Round:     <NN>  —  .code-winnow/round-<NN>/
+Compared:  <branch> @ <side>   vs   <base> @ <sha>   (<scope>)
 Generated: <YYYY-MM-DD HH:MM>
+
+## Winnow report
 Scope: <diff source> — <current branch> vs <base / worktree / staged>
 Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
 Feature: <name> — <N> of <files> files          (omit when none was named)
@@ -20,7 +23,7 @@ Passes: S scope, A chaff, B comments, C docs+headers, D performance, E silent-fa
 Scope appeals: <n> — listed below, unresolved   (omit when none)
 Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded,
         <n> deletions vetoed by E, <n> perf notes dropped
-Performance notes: <n> — .code-winnow/<stem>.notes.md (not applied)
+Performance notes: <n> — round-NN/notes.md (not applied)
         (or: "D skipped — no loops or hot-path entry points in this diff")
 Not fixable here: <n> P1/P2 findings reported but needing a design change   (omit when none)
 Previous run: <prior stem, or "none">
@@ -56,9 +59,15 @@ Previous run: <prior stem, or "none">
 ### Previously declined
 - <finding> — raised <date>, declined
 
-Full report: .code-winnow/<stem>.md — say the word to expand any item.
+Full report: .code-winnow/round-NN/report.md — say the word to expand any item.
 Fix all, or tell me which.
 ```
+
+**The first three lines are mandatory on every markdown file a round writes** —
+`report.md`, `fixplan.md`, `notes.md` and every `agent-*.md`. Filenames inside a round
+are short and identical every round, so they say nothing about what was reviewed; this
+block is where that fact lives. Copy the values out of `round-NN/meta.json` rather than
+retyping them.
 
 Every count in that header comes out of the JSON: `files`, `scanned_files`,
 `added_lines`. When `scanned_files < files`, say which ones were skipped and why.
@@ -91,74 +100,11 @@ carry no header; want a header pass as its own change?"* and stop.
 
 ## The fix plan
 
-`.code-winnow/<stem>.fixplan.md`. The handoff contract for all three Step 4b rungs.
+`.code-winnow/round-NN/fixplan.md`. The handoff contract for all three Step 4b rungs.
 
-````markdown
-# Fix plan — currentfeature-dash_targetmain_20260802-2028
-
-Status:   APPROVED by the user on 2026-08-02
-Skill:    /home/me/.claude/skills/code-winnow
-Scope:    12 files in diff, 3 in feature "dash cooldown"
-Feature:  "winnow the dash cooldown work" — the user's own words, confirmed to mean
-          src/Dash.cs, src/DashConfig.cs, src/PlayerInput.cs
-Baseline: .code-winnow/currentfeature-dash_targetmain_20260802-2028.json
-Backup:   .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/
-Undo:     cp -a .code-winnow/currentfeature-dash_targetmain_20260802-2028.pre-fix/. .
-Verify:   dotnet test
-Tests-before: (filled in by Step 5a, before the first edit)
-
-## Code fixes — approved (delete a whole item to drop it)
-
-- [ ] P1 bare catch swallows the cooldown reset
-      file:     src/Dash.cs
-      line:     88
-      occurrence: 1
-      of:         1
-      anchor:   catch (Exception) { }
-      fix:      narrow to InvalidOperationException, or let it propagate
-      evidence: rewrite, nothing removed
-
-- [ ] P2 `cachedRig` declared and never read; the comment above claims it is
-      reserved but names no ticket — merged finding, both lines go
-      file:     src/Dash.cs
-      line:     41
-      occurrence: 1
-      of:         1
-      anchor:   private Rig cachedRig;
-      fix:      delete the field and the comment above it
-      evidence: git grep -c cachedRig -- '*.cs'          -> 3 (all in src/Dash.cs)
-                git grep -l cachedRig -- '*.prefab' '*.unity' -> (no output)
-                not [SerializeField], not public, no attribute block
-
-## Doc fixes — approved
-
-- [ ] P2 the tuning guide still documents `Dash.Charge()`, renamed this change
-      file:     docs/tuning.md
-      line:     37
-      occurrence: 1
-      of:         2
-      anchor:   Call `Dash.Charge()` before the cooldown elapses.
-      fix:      rename to `Dash.BeginCharge()`
-      evidence: rewrite, nothing removed
-      falsified-by: src/Dash.cs:120
-
-## Header fixes — approved separately at the Step 4 gate
-
-- [ ] P2 no file header; repo convention is the Epic copyright line
-      file:     src/DashConfig.cs
-      line:     1
-      occurrence: 1
-      of:         1
-      anchor:   using UnityEngine;
-      fix:      insert the repo header above line 1
-      evidence: sampled 40 first-party .cs files (Plugins/ and ThirdParty/
-                excluded); 40/40 open with the same Epic line
-
-## Never touch
-
-- src/Dash.cs — `[SerializeField] tuningCurve`, referenced by Dash.prefab
-- Any file not named by a `file:` line above
-````
+**The shape is the template at `scaffold/round/fixplan.md`.** Step 2 already copied it
+into the round, so fill that file rather than composing one from memory. What a skeleton
+cannot carry lives here.
 
 An unattended plan's header reads `Status: UNAPPROVED — no human reviewed these
 findings`, and every section heading says *proposed*, not *approved*.
@@ -187,24 +133,8 @@ sides rather than a number. A merge that quietly drops a case shows up as `-3 +2
 
 ## The performance notes document
 
-`.code-winnow/<stem>.notes.md`. Agent D's output goes here and nowhere else.
-
-```markdown
-# Performance notes — currentfeature-dash_targetmain_20260803-1420
-
-Scope:    12 files in diff, 3 in feature "dash cooldown"
-Source:   Agent D, judgment pass. Nothing here is in the fix plan.
-Status:   NOT APPLIED — hypotheses, not approved changes.
-Declined: 2 previously declined, not repeated
-
-## Notes
-
-- src/Grid.cs:22 — neighbour scan is O(n²)
-  frequency:  once per FixedUpdate, 50/sec, over ~400 entities
-  reasoning:  nested for over `entities` inside `entities`, neither bounded
-  suggestion: spatial hash, or bail on the distance check first
-  measured:   no
-```
+`.code-winnow/round-NN/notes.md`. Agent D's output goes here and nowhere else.
+**The shape is the template at `scaffold/round/notes.md`.**
 
 **Never write `- [ ]` and never write a `file:` line in this document.** Those are the
 two tokens `scripts/backup.py` keys on to find fix items and the paths to back up, so a
@@ -212,6 +142,10 @@ notes document carrying either would parse as a fix plan — and a plan is a thi
 executor edits files from. The differing filename is the first guard, this is the
 second, and `Status: NOT APPLIED` (not the `APPROVED` the script requires) is the third.
 The failure is silent and irreversible where every other guard here costs a re-run.
+
+`notes.md` and `fixplan.md` are now siblings in one directory rather than separated by a
+long stem, so any `round-NN/*.md` glob sweeps both. The differing filename is still the
+first of the three guards; it is simply no longer the obvious one.
 
 Write the document even when D found nothing — an empty Notes section and a line saying
 the pass ran. When D was not dispatched at all, write no document and say so in the
@@ -248,6 +182,7 @@ Matched on path plus anchor text; the line number is ignored, because lines shif
   declined 2026-08-03 — startup only, don't care
 ```
 
-Both persistent files survive Step 2's rotation because neither name starts with
-`current`, which is the prefix the archive glob matches. A rename that gave either a
-stem-shaped name would silently turn every settled answer back into an open question.
+Both persistent files stay at the workspace root, and that no longer rests on an
+accident. It used to depend on neither name starting with `current`, the prefix the
+archive glob matched; nothing globs the root now, so it is structural. That is what
+makes "declined" mean *permanently* declined.

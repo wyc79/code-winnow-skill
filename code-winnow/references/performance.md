@@ -89,7 +89,7 @@ So outside the claimed three, note only what is language-independent — a neste
 
 ## Reporting
 
-Notes go to `.code-winnow/<stem>.notes.md`, never to the main report and never to the fix plan. Format, one entry per note:
+Notes go to `.code-winnow/round-NN/notes.md`, never to the main report and never to the fix plan. The template is already in the round; fill it. Format, one entry per note:
 
 ```
 - src/Grid.cs:22 — neighbour scan is O(n²)

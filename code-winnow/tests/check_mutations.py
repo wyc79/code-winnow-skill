@@ -35,6 +35,7 @@ BACKUP = os.path.join(WINNOW, "scripts", "backup.py")
 SKILL = os.path.join(WINNOW, "SKILL.md")
 REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
 TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
+NOTES_TPL = os.path.join(WINNOW, "scaffold", "round", "notes.md")
 
 
 # (name, target_file, find, replace_with, pytest -k expression that MUST fail)
@@ -135,17 +136,18 @@ MUTATIONS = [
     # except the notes document failing to parse as a fix plan. Three ways it
     # could start parsing, one row each - the tokens Step 5a finds items and
     # paths by, and the Status line that gates the whole script.
-    ("notes-doc-no-file-line", REPORT_FORMAT,
-     "  frequency:  once per FixedUpdate",
-     "  file:       src/Grid.cs\n  frequency:  once per FixedUpdate",
+    ("notes-doc-no-file-line", NOTES_TPL,
+     "  frequency:  <fill: how often it runs, and over how much>",
+     "  file:       src/Grid.cs\n"
+     "  frequency:  <fill: how often it runs, and over how much>",
      "notes"),
 
-    ("notes-doc-no-item-marker", REPORT_FORMAT,
-     "- src/Grid.cs:22",
-     "- [ ] src/Grid.cs:22",
+    ("notes-doc-no-item-marker", NOTES_TPL,
+     "- <fill: path:line",
+     "- [ ] <fill: path:line",
      "notes"),
 
-    ("notes-doc-status-not-approved", REPORT_FORMAT,
+    ("notes-doc-status-not-approved", NOTES_TPL,
      "Status:   NOT APPLIED",
      "Status:   APPROVED",
      "notes"),

@@ -705,21 +705,21 @@ def test_step5a_refuses_a_plan_that_is_not_approved(repo, status, why):
 # Agent D's notes document must never be executable as a fix plan
 # --------------------------------------------------------------------------
 
+NOTES_TEMPLATE = os.path.join(WINNOW, "scaffold", "round", "notes.md")
+
+
 def _notes_template():
     """The performance-notes document template.
 
-    It lives in references/report-format.md, which is where every artifact's
-    shape moved. The template has to be found wherever it actually is: a copy
-    kept here would agree with itself forever while the document drifted.
+    It ships in scaffold/round/, which Step 2 copies into the round. It was
+    previously a fenced block inside references/report-format.md; the template
+    has to be found wherever it actually is, because a copy kept here would
+    agree with itself forever while the real document drifted.
     """
-    text = open(REPORT_FORMAT, encoding="utf-8").read()
-    hits = [m.group(1) for m in re.finditer(r"```markdown\n(.*?)```", text, re.S)
-            if "# Performance notes" in m.group(1)]
-    assert len(hits) == 1, (
-        f"expected exactly one performance-notes template in "
-        f"references/report-format.md, found {len(hits)} - this test cannot "
-        f"tell which one is current")
-    return hits[0]
+    assert os.path.isfile(NOTES_TEMPLATE), (
+        f"no notes template at {NOTES_TEMPLATE} - Step 2 copies it into every "
+        f"round, so its absence means the round has no notes document at all")
+    return open(NOTES_TEMPLATE, encoding="utf-8").read()
 
 
 def test_the_notes_document_is_not_fix_plan_shaped():
@@ -937,3 +937,40 @@ def test_step4_index_substitutes_every_path_and_leaves_no_dead_link(repo):
             and os.path.basename(h) not in
             ("agent-S.md", "agent-C.md", "agent-D.md")]
     assert not dead, f"dead links in the regenerated index: {dead}"
+
+
+# --------------------------------------------------------------------------
+# the references follow the layout
+# --------------------------------------------------------------------------
+
+def test_report_format_points_at_the_templates_it_no_longer_holds():
+    """One definition per shape. report-format.md stops carrying a second copy
+    of the fixplan and notes shapes and keeps what a skeleton cannot express."""
+    text = open(REPORT_FORMAT, encoding="utf-8").read()
+    assert "scaffold/round/fixplan.md" in text
+    assert "scaffold/round/notes.md" in text
+    # The rules a template cannot carry must survive the move.
+    assert "unquoted and unfenced" in text
+    assert ("never severity-sorted" in text.lower()
+            or "never sort" in text.lower())
+
+
+def test_no_reference_file_names_a_stem_shaped_artifact_path():
+    """Every <stem>.md / <stem>.json path is now round-NN/<short name>. A
+    pointer that survives the move but names the old shape sends an agent to a
+    path nothing writes, and the run looks normal."""
+    import glob
+    bad = []
+    for p in glob.glob(os.path.join(WINNOW, "references", "*.md")):
+        for n, line in enumerate(open(p, encoding="utf-8"), 1):
+            if re.search(r"\.code-winnow/[^\s`)]*<stem>", line):
+                bad.append(f"{os.path.basename(p)}:{n}: {line.strip()[:90]}")
+    assert not bad, "stem-named paths still in the references:\n  " + \
+        "\n  ".join(bad)
+
+
+def test_report_format_requires_the_identity_block():
+    text = open(REPORT_FORMAT, encoding="utf-8").read()
+    assert "Compared:" in text, (
+        "the filename no longer says what was reviewed, so the identity block "
+        "has to be specified where the report's shape is specified")

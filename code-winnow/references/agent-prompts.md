@@ -13,6 +13,27 @@ they are just findings from no standard at all.
 when Step 1 resolved a feature — the confirmed file and region list plus *"Findings
 only from these hunks. You may read anything; report nothing else."*
 
+## Where each agent writes — in every prompt
+
+> Write your output to `<the round directory>/agent-<X>.md`, and open it with these
+> three lines, filled from `<the round directory>/meta.json`:
+>
+> ```
+> Round:     <NN>  —  .code-winnow/round-<NN>/
+> Compared:  <branch> @ <side>   vs   <base> @ <sha>   (<scope>)
+> Generated: <YYYY-MM-DD HH:MM>
+> ```
+
+Expand the round directory to its real value, exactly as with `$WINNOW` — a subagent
+has no `$ROUND` either. Files inside a round are short and identical every round, so
+nothing in `agent-B.md` says what it reviewed; that block is the only thing that does,
+and it is what makes the file readable when its path is pasted somewhere on its own.
+
+Anything an agent generates that is not its own report goes in
+`<the round directory>/scratch/`, and any script it writes goes in
+`.code-winnow/utils/`. Both directories already exist. A run once left nine
+intermediate files at the workspace root because no rule named them.
+
 ## The staleness precondition — verbatim, in every Step 3 prompt
 
 > Before you report anything, confirm your input is still current. You were given a
