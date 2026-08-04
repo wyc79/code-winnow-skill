@@ -68,12 +68,29 @@ Test-chaff detection is broader, because the shapes are: pytest/unittest, NUnit/
 
 ```
 code-winnow/
-  SKILL.md                 # Agent instructions
+  SKILL.md                 # Agent instructions — the workflow and its rules
   scripts/scan.py          # Deterministic candidate scanner
-  references/              # Judgment standards (patterns, languages, tests,
-                           #   performance, fragility, portability)
+  scripts/backup.py        # Step 5a: the restore point, and six refusals
+  references/
+    core-patterns.md       # Universal judgment standard — read every run
+    agent-prompts.md       # The six dispatch prompts (S, A, B, C, D, E)
+    report-format.md       # Report, fix plan, notes and declined-file shapes
+    fragility.md           # Agent E's gate
+    performance.md         # Agent D's gate
+    tests.md               # Test-chaff judgment standard
+    portability.md         # Companion-skill detection and degraded paths
+    python.md, csharp-unity.md, cpp-ue5.md    # The three claimed languages
   tests/                   # Scanner tests, SKILL.md workflow harness, mutation check
+DESIGN.md                  # Why the mechanical parts are written as they are.
+                           #   Not shipped to agents; read it before editing a snippet.
 ```
+
+`SKILL.md` is the workflow and nothing else. The prompts, templates and the backup
+script live beside it so an orchestrator that only needs to *dispatch* a prompt does not
+have to read it, and so the backup is a testable script rather than a heredoc an agent
+retypes. Every one of those files is still under test: `test_workflow.py` extracts and
+runs SKILL.md's shell blocks, and `check_mutations.py` mutates the script, the templates
+and the document alike.
 
 ## Scanner (standalone)
 

@@ -125,7 +125,7 @@ Read that file at the start of the capability check and treat anything listed as
 
 ## What must not depend on the host
 
-The scanner is stdlib-only, never imports outside the standard library, never calls the network, and **writes no files at all** — it prints to stdout and stderr, and every `.code-winnow/` artifact exists because a step in SKILL.md redirected it there. Keep it that way — it is the one part guaranteed to behave identically on Hermes, Codex, Cursor, a `python3` call in CI, or a model with no tools at all reading pasted output.
+Both scripts are stdlib-only, never import outside the standard library, and never call the network. **The scanner writes no files at all** — it prints to stdout and stderr, and every `.code-winnow/` artifact exists because a step in SKILL.md redirected it there. `scripts/backup.py` is the one deliberate exception: copying files *is* its job, it writes only into the destination it is given, and it refuses rather than writing when anything about the plan or the destination is wrong. Keep the scanner that way — it is the one part guaranteed to behave identically on Hermes, Codex, Cursor, a `python3` call in CI, or a model with no tools at all reading pasted output.
 
 It also resolves every path against `git rev-parse --show-toplevel` rather than the cwd, so it can be invoked from anywhere in the tree. Keep that too: the failure it prevents is the silent one, where the scanner opens nothing, finds nothing, and prints a clean bill of health. Anything it cannot read goes into `errors` with `"complete": false` and exit code 2.
 

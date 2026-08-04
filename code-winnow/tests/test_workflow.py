@@ -1,11 +1,17 @@
 """End-to-end test of the workflow SKILL.md documents.
 
 `test_scan.py` tests the scanner. Nothing tested the *document*, and the
-document is where most of the skill lives: ~20 shell and Python snippets that
-look like code, are formatted like code, and had never been executed. Reading
-them is not a substitute - an unquoted `WINNOW=C:\\Users\\...` assignment, a
+document is where most of the skill lives: ~14 shell snippets that look like
+code, are formatted like code, and had never been executed. Reading them is not
+a substitute - an unquoted `WINNOW=C:\\Users\\...` assignment, a
 `command -v python3` that resolves the Microsoft Store stub, and a shell
 function that cannot survive a call boundary all read perfectly.
+
+Step 5a used to be 70 lines of Python inlined in a heredoc here; it now lives in
+`scripts/backup.py`, and SKILL.md invokes it. That is a directly-testable script
+rather than a snippet an agent retypes, but the guards are the same guards, so
+the tests below still drive it through the extracted bash block - the invocation
+is part of the documented workflow and can break independently of the script.
 
 Two properties make this a real guard rather than a copy that drifts:
 
@@ -35,6 +41,8 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
 SKILL_MD = os.path.join(WINNOW, "SKILL.md")
+REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
+BACKUP_PY = os.path.join(WINNOW, "scripts", "backup.py")
 
 
 # --------------------------------------------------------------------------
@@ -72,7 +80,7 @@ SPINE = [
     ("step1", "# QUOTE IT"),
     ("step2", "rm -f .code-winnow/env.sh"),
     ("step3", "Ask the scanner what it actually reviewed"),
-    ("step5a", "REFUSING: fix items appear after"),
+    ("step5a", "scripts/backup.py"),
     ("step6", '--since ".code-winnow/$STEM.json" $DECLINED'),
 ]
 
@@ -314,9 +322,12 @@ def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path
         "- [ ] P1 thing\n      file:     src/a.py\n"
         "      anchor:   x = 1\n      evidence: rewrite, nothing removed\n",
         encoding="utf-8")
-    body = _find_block("REFUSING: fix items appear after")[2]
+    body = _find_block("scripts/backup.py")[2]
     poisoned = f".code-winnow/{stem}.pre-fix/  (NOT YET MADE)"
-    p = run_block(f'STEM={stem}\nBACKUP={poisoned!r}\n' + body, str(repo))
+    # WINNOW too: the block now invokes scripts/backup.py by path, and this
+    # test deliberately runs without the env.sh that would otherwise supply it.
+    p = run_block(f'WINNOW={WINNOW!r}\nSTEM={stem}\nBACKUP={poisoned!r}\n' + body,
+                  str(repo))
     both = p.stdout + p.stderr
     assert "REFUSING:" in both, both
     assert not list((repo / ".code-winnow").glob("**/*NOT YET*")), \
@@ -546,7 +557,7 @@ def _write_plan(repo, stem, status_line):
 
 
 def _run_step5a(repo):
-    return run_block(_find_block("REFUSING: fix items appear after")[2], str(repo))
+    return run_block(_find_block("scripts/backup.py")[2], str(repo))
 
 
 @requires_bash
@@ -560,6 +571,55 @@ def test_step5a_backs_up_an_approved_plan(repo):
     assert "REFUSING" not in out, out
     assert "backed up 1 file(s)" in p.stdout, out
     assert (repo / ".code-winnow" / f"{stem}.pre-fix" / "feature.py").is_file()
+
+
+@requires_bash
+def test_step5a_refuses_a_plan_item_with_no_file_line(repo):
+    """`file:` is the whole backup list. An item without one names no target,
+    so the copy silently under-collects and then prints a success count derived
+    from the same regex that just missed it - and the file is edited with no
+    restore point. Refusing is the only safe reading."""
+    stem = _bootstrap(repo)
+    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
+        f"# Fix plan - {stem}\n"
+        "Status:   APPROVED by the user on 2026-08-03\n\n"
+        "## Code fixes - approved\n\n"
+        "- [ ] P1 bare except in feature.py line 4 swallows the loader error\n"
+        "      anchor:   except Exception:\n"
+        "      evidence: rewrite, nothing removed\n",
+        encoding="utf-8")
+    p = _run_step5a(repo)
+    out = p.stdout + p.stderr
+    assert "REFUSING" in out, f"backed up a plan item naming no file:\n{out}"
+    assert "no `file:` line" in out, out
+    assert not (repo / ".code-winnow" / f"{stem}.pre-fix").exists()
+
+
+def test_every_reference_path_named_in_the_docs_exists():
+    """Extraction moved prompts, templates and the backup script out of
+    SKILL.md. A pointer that survives the move but names a file that does not
+    is the failure mode: the agent opens nothing, reports findings from no
+    standard at all, and the run looks normal. Cheap to check, silent to miss.
+    """
+    docs = [SKILL_MD, os.path.join(WINNOW, "references", "agent-prompts.md")]
+    missing = []
+    for doc in docs:
+        text = open(doc, encoding="utf-8").read()
+        for rel in set(re.findall(r"\$WINNOW/((?:references|scripts)/[\w.-]+)", text)):
+            if not os.path.isfile(os.path.join(WINNOW, rel)):
+                missing.append(f"{os.path.basename(doc)} -> $WINNOW/{rel}")
+    assert not missing, "documented paths that do not exist:\n  " + "\n  ".join(missing)
+
+
+def test_the_backup_script_exists_and_skill_md_invokes_it_by_path():
+    """The Step 5a block is now an invocation, not an implementation. If the
+    script is gone the block fails loudly; if the block stops naming it, the
+    SPINE marker below stops matching and the harness tests nothing."""
+    assert os.path.isfile(BACKUP_PY), "scripts/backup.py is missing"
+    _, _, body = _find_block("scripts/backup.py")
+    assert '"$WINNOW/scripts/backup.py"' in body, (
+        "Step 5a must invoke the script through $WINNOW - a bare relative path "
+        "only resolves when the cwd is the skill folder, which it never is")
 
 
 @requires_bash
@@ -592,13 +652,19 @@ def test_step5a_refuses_a_plan_that_is_not_approved(repo, status, why):
 # --------------------------------------------------------------------------
 
 def _notes_template():
-    """The performance-notes document template, from Step 4."""
-    text = open(SKILL_MD, encoding="utf-8").read()
+    """The performance-notes document template.
+
+    It lives in references/report-format.md, which is where every artifact's
+    shape moved. The template has to be found wherever it actually is: a copy
+    kept here would agree with itself forever while the document drifted.
+    """
+    text = open(REPORT_FORMAT, encoding="utf-8").read()
     hits = [m.group(1) for m in re.finditer(r"```markdown\n(.*?)```", text, re.S)
             if "# Performance notes" in m.group(1)]
     assert len(hits) == 1, (
-        f"expected exactly one performance-notes template in SKILL.md, "
-        f"found {len(hits)} - this test cannot tell which one is current")
+        f"expected exactly one performance-notes template in "
+        f"references/report-format.md, found {len(hits)} - this test cannot "
+        f"tell which one is current")
     return hits[0]
 
 

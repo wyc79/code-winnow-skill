@@ -31,7 +31,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
 SCAN = os.path.join(WINNOW, "scripts", "scan.py")
+BACKUP = os.path.join(WINNOW, "scripts", "backup.py")
 SKILL = os.path.join(WINNOW, "SKILL.md")
+REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
 TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
 
 
@@ -39,7 +41,9 @@ TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
 #
 # SKILL.md is a mutation target too. Its embedded scripts are executable
 # artifacts that test_workflow.py extracts and runs, so a guard written into
-# one of them can go vacuous exactly like a guard in scan.py can.
+# one of them can go vacuous exactly like a guard in scan.py can. The same
+# holds for the templates in references/report-format.md: the notes document's
+# shape is what stops an executor treating Agent D's hypotheses as a fix plan.
 MUTATIONS = [
     ("directive-exemption", SCAN,
      "    if is_directive(text):\n        return None\n",
@@ -96,36 +100,26 @@ MUTATIONS = [
     # only what explicitly says UNAPPROVED. A plan with no Status line then
     # applies - the shape a truncated write or a hand-rolled plan produces -
     # routing straight around the Step 4b gate.
-    ("status-fail-closed", SKILL,
-     r'''m = re.search(r"(?m)^\s*Status:\s*(\S.*?)\s*$", header)
-if not m:
-    sys.exit("REFUSING: no `Status:` line in the plan header. A plan nobody "
-             "approved reads exactly like one nobody wrote a status for, so "
-             "this refuses both. Add `Status: APPROVED by <who> on <date>` "
-             "only if a human actually approved these findings.")
-if not m.group(1).upper().startswith("APPROVED"):
-    sys.exit(f"REFUSING: Status reads {m.group(1)!r}, not APPROVED. An "
-             "unattended run writes UNAPPROVED because nobody reviewed the "
-             "findings, and applying it would route around the Step 4b gate.")''',
-     r'''if "UNAPPROVED" in header:
-    sys.exit("REFUSING: UNAPPROVED")''',
+    ("status-fail-closed", BACKUP,
+     '    if not m:\n        sys.exit("REFUSING: no `Status:` line',
+     '    if False:\n        sys.exit("REFUSING: no `Status:` line',
      "step5a"),
 
     # Agent D's notes are never applied, and nothing mechanical enforces that
     # except the notes document failing to parse as a fix plan. Three ways it
     # could start parsing, one row each - the tokens Step 5a finds items and
     # paths by, and the Status line that gates the whole script.
-    ("notes-doc-no-file-line", SKILL,
+    ("notes-doc-no-file-line", REPORT_FORMAT,
      "  frequency:  once per FixedUpdate",
      "  file:       src/Grid.cs\n  frequency:  once per FixedUpdate",
      "notes"),
 
-    ("notes-doc-no-item-marker", SKILL,
+    ("notes-doc-no-item-marker", REPORT_FORMAT,
      "- src/Grid.cs:22",
      "- [ ] src/Grid.cs:22",
      "notes"),
 
-    ("notes-doc-status-not-approved", SKILL,
+    ("notes-doc-status-not-approved", REPORT_FORMAT,
      "Status:   NOT APPLIED",
      "Status:   APPROVED",
      "notes"),
@@ -188,8 +182,8 @@ if not m.group(1).upper().startswith("APPROVED"):
     # anyone reconciles against a --whole-files baseline - which SKILL.md Step
     # 4 writes by name.
     ("since-counts-preexisting", SCAN,
-     "            findings + declined + filtered_preexisting, args.since)",
-     "            findings + declined, args.since)",
+     "            findings + declined + filtered_preexisting, args.since,",
+     "            findings + declined, args.since,",
      "whole_files_baseline or genuinely_fixed"),
 
     # `finding_key` reads three fields; the guards used to check two. These
@@ -246,10 +240,19 @@ if not m.group(1).upper().startswith("APPROVED"):
      "untracked_binary"),
 
     # A backup path pasted out of the plan header instead of computed.
-    ("step5a-backup-path-shape", SKILL,
-     'if re.search(r"\\(|\\s{2,}", dest):',
-     'if False:',
+    ("step5a-backup-path-shape", BACKUP,
+     '    if re.search(r"\\(|\\s{2,}", dest):',
+     '    if False:',
      "pasted_from_the_plan"),
+
+    # The plan's `file:` lines are the whole backup list. Parse the path out of
+    # the headline sentence instead and you lose paths with spaces, items with
+    # no `:LINE`, and the second file of every merged finding - while printing
+    # a success count derived from the same regex that just missed them.
+    ("step5a-file-line-required", BACKUP,
+     '        (paths.extend(found) if found else bad.append(n))',
+     '        paths.extend(found)',
+     "step5a"),
 
     # A test file is a mutation target too. The secrets fixtures are assembled
     # from pieces so that scanning test_scan.py does not trip the rule it

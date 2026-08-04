@@ -589,9 +589,30 @@ STOPWORDS = {
 }
 
 
-def words(text):
+# The archetypal restated comment in references/core-patterns.md is
+# `// increment the counter` above `counter++`, and the overlap rule could not
+# see it: the comment's verb is English, the code's verb is an operator, so
+# {increment, counter} vs {counter} scored 0.5 against a 0.6 threshold and the
+# flagship example did not fire. Lowering the threshold would have widened
+# every other comparison too, against the standing position that a noisy rule
+# is worse than a missing one. Naming the two unambiguous operators closes the
+# archetype and touches nothing else. `=` is deliberately absent: "set" and
+# "assign" appear in far too many comments that are not restatements.
+CODE_VERBS = ((r"\+\+|\+=", "increment"), (r"--|-=", "decrement"))
+
+
+def words(text, code=False):
+    """Comment or code line -> the set of words to compare.
+
+    `code=True` also expands the operators above to the verb a human would use
+    for them, so a comment naming the action matches the line performing it.
+    """
     text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     found = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", text)]
+    if code:
+        for pattern, verb in CODE_VERBS:
+            if re.search(pattern, text):
+                found.append(verb)
     return [w for w in found if w not in STOPWORDS]
 
 
@@ -1043,7 +1064,7 @@ def check_universal(path, lines, findings):
 
         if body is not None and idx < len(lines):
             comment_words = set(words(body))
-            code_words = set(words(lines[idx]))
+            code_words = set(words(lines[idx], code=True))
             if len(comment_words) >= 2:
                 overlap = len(comment_words & code_words) / len(comment_words)
                 if overlap >= 0.6:

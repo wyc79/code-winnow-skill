@@ -552,6 +552,33 @@ def test_preprocessor_lines_are_not_comments(tmp_path):
     assert "commented-code" not in found
 
 
+@pytest.mark.parametrize("name, body", [
+    ("a.py", "# increment the counter\ncounter += 1\n"),
+    ("a.cpp", "// increment the counter\ncounter++;\n"),
+    ("a.py", "# decrement the retries\nretries -= 1\n"),
+    ("a.cs", "// decrement the retries\nretries--;\n"),
+])
+def test_the_archetypal_restated_comment_actually_fires(tmp_path, name, body):
+    """`// increment the counter` above `counter++` is THE example in
+    core-patterns.md, and the overlap rule could not see it: the comment's verb
+    is English and the code's verb is an operator, so {increment, counter} vs
+    {counter} scored 0.5 against a 0.6 threshold. The reference presented it as
+    the archetype while the deterministic half silently never caught it."""
+    write(tmp_path, name, body)
+    assert "restated-comment" in rules(str(tmp_path), "--paths", name), \
+        f"the archetype still does not fire for {body!r}"
+
+
+def test_operator_verbs_do_not_widen_the_rule(tmp_path):
+    """The fix maps two operators to their English verbs; it must not turn the
+    threshold down for everything else. `=` is deliberately not mapped - "set"
+    and "assign" appear in far too many comments that are not restatements."""
+    write(tmp_path, "b.py",
+          "# Set up the widget tree\nwidget = build()\n\n"
+          "# Guard against a cold cache\ncount += 1\n")
+    assert "restated-comment" not in rules(str(tmp_path), "--paths", "b.py")
+
+
 # --------------------------------------------------------------------------
 # reconciliation
 # --------------------------------------------------------------------------
@@ -2238,3 +2265,39 @@ def test_no_example_in_the_scanner_source_trips_the_secrets_rule():
         "the scanner's own source carries a well-formed credential:\n  "
         + "\n  ".join(f"{f['severity']} line {f['line']}: {f['anchor'][:70]}"
                       for f in tripped))
+
+
+def test_mutation_rows_still_apply():
+    """Every check_mutations.py row must still match its target file.
+
+    A row whose `find` string no longer appears silently stops verifying
+    anything - the same defect class the mutation harness exists to catch, one
+    level up. `since-counts-preexisting` went stale exactly this way when the
+    call it anchors on gained a parameter, and nothing said so for as long as
+    nobody ran the harness by hand.
+
+    check_mutations.py is too slow for the default suite (one pytest run per
+    row), but *this* costs a few file reads, so the staleness half runs here
+    and turns a skimmed warning line into a red test.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import check_mutations
+    finally:
+        sys.path.pop(0)
+
+    stale = []
+    for name, target, find, _replace, _kexpr in check_mutations.MUTATIONS:
+        if not os.path.isfile(target):
+            stale.append(f"{name}: target {target} does not exist")
+            continue
+        text = open(target, encoding="utf-8").read()
+        n = text.count(find)
+        if n != 1:
+            stale.append(f"{name}: `find` matches {n} times in "
+                         f"{os.path.basename(target)} (expected exactly 1)")
+    assert not stale, (
+        "check_mutations.py rows that no longer pin anything:\n  "
+        + "\n  ".join(stale)
+        + "\n\nUpdate the row to the code as it now stands, or delete it if "
+          "the guard is genuinely gone.")
