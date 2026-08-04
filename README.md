@@ -50,7 +50,7 @@ Then invoke it by name (`code-winnow`, `winnow`, `de-slop`) or by asking the age
 4. **Scope, if a feature was named** — a separate agent draws the boundary from your own words before any review starts, and you confirm it. Deciding what is *eligible* to be judged matters more than any verdict, and the agent that wrote the code should not be the one drawing that line.
 5. **Judge** — five parallel agents with no shared context and no design rationale: chaff, comments + docstrings, documentation + file headers, performance, and silent failure. Docstrings get their own pass, since generated diffs carry one per function whether or not there is anything to say. Docs and performance are conditional — they run only when the diff gives them something to look at.
 6. **Reconcile** — a conflict check merges their outputs across ten classes. A comment claiming intent overrides a finding only when it names a *checkable* why; a bare "reserved for future use" merges with the code into one decision instead of excusing it. And the fragility pass can **veto a deletion**: when it names the mechanism that makes a line load-bearing, the proposed removal never reaches the fix plan.
-7. **Report** — human-readable + JSON under `.code-winnow/`, reconciled against prior runs and declined findings. Performance notes go to a separate document and are never applied.
+7. **Report** — human-readable + JSON under `.code-winnow/round-NN/`, reconciled against the most recent prior round *of the same scope* and against declined findings. Performance notes go to a separate document and are never applied. The root index is regenerated so one clickable file points at everything the round produced.
 8. **Apply only on approval** — writes a fix plan, then applies it in a cleared context, a fix subagent, or in place. Copies every file it will edit to a restore point first (untracked files have no git undo) and refuses to edit if that copy is incomplete. Unattended runs stop at the plan, mark it `UNAPPROVED`, and never edit.
 9. **Verify** — re-run the **whole** test suite and compare it against the baseline captured before the first edit, not against green: a failure absent from the baseline is yours, a pre-existing one is not yours to chase, and a green run with *fewer tests* is a regression. Then re-scan with reconciliation, run a deletion-safety pass over the removed lines only, and report approved / applied / skipped.
 
@@ -82,10 +82,38 @@ code-winnow/
     tests.md               # Test-chaff judgment standard
     portability.md         # Companion-skill detection and degraded paths
     python.md, csharp-unity.md, cpp-ue5.md    # The three claimed languages
+  scaffold/                # Copied into the workspace: root at Step 0, round at Step 2
+    root/README.md         #   the index template — ROUND is its only path placeholder
+    round/README.md        #   what is in a round folder, and the filename rule
+    round/fixplan.md       #   the plan template; its Status is a placeholder, so an
+                           #   unfilled copy is refused by backup.py
+    round/notes.md         #   Agent D's template
   tests/                   # Scanner tests, SKILL.md workflow harness, mutation check
 DESIGN.md                  # Why the mechanical parts are written as they are.
                            #   Not shipped to agents; read it before editing a snippet.
 ```
+
+### The workspace it writes
+
+```
+.code-winnow/
+  README.md          the index — one clickable file, regenerated each round
+  env.sh  declined.json  perf-declined.md  substitutions.md
+  utils/             helper scripts a run wrote, shared across rounds
+  round-01/
+  round-02/          meta.json, report.md, fixplan.md, notes.md, agent-S..E.md,
+                     scan*.json, input.diff, tests-*, pre-fix/, scratch/
+```
+
+**Every round is self-contained and nothing is ever moved between them** — rotation is
+`mkdir`. Filenames inside a round are short and identical every round, so what the round
+compared to what lives in `meta.json` and in a three-line block at the top of every
+markdown file, never in a filename. Anything a run generates that the round README does
+not list goes in `scratch/`.
+
+There are no symlinks or aliases at the root, deliberately: `ln -s` on Git Bash silently
+produces a *copy*, and a hard-linked `fixplan.md` re-points every rotation, so a resume
+line copied yesterday would apply today's plan. `DESIGN.md` has the measurements.
 
 `SKILL.md` is the workflow and nothing else. The prompts, templates and the backup
 script live beside it so an orchestrator that only needs to *dispatch* a prompt does not

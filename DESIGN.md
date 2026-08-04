@@ -94,24 +94,97 @@ finding as `resolved` — a page of "no longer true" claims about findings that 
 still true. Same defect as running `--min-severity` before reconciliation, which is why
 the filter lives at the report layer and touches nothing the scanner writes.
 
-## Step 2 — the stem, the archive, and `env.sh`
+## Step 2 — the stem, the round, and `env.sh`
 
-**Why the stem is captured once.** Steps 3, 4 and 6 all write files named from it, and
-each invocation stamps its own clock, so a run crossing a minute boundary ends up with
-filenames that disagree.
+**Why the stem is captured once.** It is stamped into `meta.json`, into every scanner
+JSON's `report_stem`, and into the report headers, and each invocation stamps its own
+clock — so a run crossing a minute boundary ends up with records that disagree about
+when it happened. It no longer *names* files; see below.
+
+**Why filenames inside a round are short and fixed.** A stem on every filename put a
+46-character prefix on nine lines of `ls` and made the listing unreadable, and it turned
+"which JSON is the prior baseline" into string parsing —
+`ls -1t round-*/*.json | grep -v -- '-postfix\|-p3\|-r2'`, a blocklist of ad-hoc
+suffixes that grew every time an agent invented one. Identity moved to `meta.json` and
+to a three-line block at the top of every markdown file, and the matcher compares a
+field instead of a substring.
+
+**Why `scope` and `scope_label` are two fields in `meta.json`.** `resolve_diff` returns
+a human label — `uncommitted work (staged, unstaged, 3 untracked)`. The count is part
+of the string and changes between runs, so a prior-round matcher keyed on it finds
+nothing, every run, and every report says "Previous run: none" — indistinguishable from
+a genuine first run. `scope` is the stable identity (`worktree`, `branch vs main`) and
+is the only field the matcher reads.
+
+**Why a round with no `meta.json` is skipped rather than guessed at.** Rounds written
+before this layout carry no scope, and the only way to infer one is to parse a legacy
+filename — the thing this design removes. Reconciling against a mismatched baseline
+moves findings nobody touched into `resolved`, which reads as "your fixes worked". No
+baseline is the safer failure.
+
+### Why the root has no aliases
+
+The obvious design is a symlink per report at the workspace root, pointing into the
+current round. Measured in Git Bash on Windows:
+
+| Command | Result |
+|---|---|
+| `ln -s round-01/agent-A.md agent-A.md` | a regular 20-byte **copy**, silently, exit 0 |
+| `ln -s round-01 latest` | a **copied directory**, silently |
+| `MSYS=winsymlinks:nativestrict ln -s …` | a real symlink, only with Developer Mode on |
+| `ln round-01/agent-A.md agent-A3.md` | a hard link, no env var, no privileges |
+
+A default `ln -s` that silently copies is the worst outcome available for a "most
+recent" alias: correct on round 1, stale on round 2, and nothing in the output says so.
+
+Hard links avoid that and were still rejected. A root `fixplan.md` re-points on every
+rotation, so a user who copies the resume line, starts round 03, then pastes it, applies
+round-03's plan believing it is round-02's. Naming the round in the resume line cannot
+do that. The root therefore holds one regenerated index and no aliases at all.
+
+**Why the index is rewritten in full rather than edited.** A surgical update needs a
+marker to find, and a half-updated index is worse than a stale one — it is stale in a
+way that looks current. `ROUND` is the only path placeholder, so the paths cannot be
+half-substituted either.
+
+**Why `cp -n` is not used for the root scaffold.** Step 0 is idempotent and cold entry
+at Step 5 re-runs it, so an unconditional copy overwrites a populated index with a blank
+skeleton. `cp -n` looks like the fix and is a GNU/BSD extension: a shell that ignores
+the flag clobbers, and the run carries on. Per-file `[ -f … ] ||` tests are portable and
+visible.
+
+**Why the scaffold copy sits after `git check-ignore` and not beside it.** Writing the
+scaffold into a workspace that is not yet excluded is the exact self-dirtying Step 0
+exists to prevent, so the check gained an `exit 1`.
+
+**Why `scratch/` and `utils/` ship as directories.** An agent will not create a
+directory it was told about in prose; it will use one that is already there. A run left
+nine intermediate files at the workspace root — a `.findings.tsv`, a
+`_comments_extract.txt`, a hand-rolled `_build_input.py` — because no rule named them,
+so no rule constrained where they landed.
+
+**Why `report.md` and the agent reports have no template.** Templates invert this
+skill's failure mode. An agent that skips `report-format.md` today writes a report with
+sections missing, which is visibly wrong; handed a skeleton, the same agent emits every
+heading anyway, producing a structurally perfect document with hollow sections. That is
+harder to catch than a missing one, and it collides with the standing rule to omit an
+empty section rather than print an empty heading. The templates that do ship — the two
+READMEs, `fixplan.md`, `notes.md` — are the ones something downstream validates.
 
 **Why stderr is kept when capturing the stem.** A `REFUSING:` line arrives there and
 also yields no stem, so a guard that only knows about empty scopes overwrites the one
 message that explains what happened — and then advises retrying with `--base`, which
 Step 1 says explicitly not to do.
 
-**Why rotation lives in Step 2 and not Step 0.** Cold entry at Step 5 re-runs Step 0, and
-rotating there would archive the fix plan the cold session was invoked to execute.
+**Why the round is created in Step 2 and not Step 0.** Cold entry at Step 5 re-runs
+Step 0, and creating a round there would orphan the fix plan the cold session was
+invoked to execute.
 
-**Why `declined.json` and `perf-declined.md` survive rotation.** The archive glob matches
-`current*`, the stem prefix. Neither persistent file starts with `current`, which is what
-makes "declined" mean *permanently* declined rather than "declined until the next run
-archives the record".
+**Why `declined.json` and `perf-declined.md` survive.** They used to survive because the
+archive glob matched `current*` and neither name started with it — an accident that a
+rename would have quietly undone, turning every settled answer back into an open
+question. Nothing globs the root now and nothing is ever moved out of it, so the
+property is structural.
 
 **Why `env.sh` exists at all.** Shell state does not survive between tool calls —
 variables set in one call are empty in the next, and each snippet is its own call.
