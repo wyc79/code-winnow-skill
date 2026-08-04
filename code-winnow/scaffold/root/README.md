@@ -34,9 +34,10 @@ have.
 
 **The middle column is template text and is always correct.** The right-hand
 column is filled at Step 4 from counts the supervisor already holds. It may end
-up blank when a count is genuinely unavailable; a surviving `<fill` marker is a
-different thing and the tests fail on it. Blank says "not known"; the marker
-says the agent stopped halfway.
+up blank when a count is genuinely unavailable; a leftover placeholder is a
+different thing and the tests fail on it. Blank says "not known"; a placeholder
+says the agent stopped halfway. Every placeholder must be replaced, including
+by nothing.
 
 Everything about a round lives in that round's own folder, and nothing is ever
 moved between them. The files here are:

@@ -86,6 +86,7 @@ SPINE = [
     ("step2", "rm -f .code-winnow/env.sh"),
     ("step3", "Ask the scanner what it actually reviewed"),
     ("step4", "PRIOR=$("),
+    ("step4-index", 'sed "s|ROUND|'),
     ("step5a", "scripts/backup.py"),
     ("step6", '--since "$ROUND/scan.json" $DECLINED'),
 ]
@@ -903,3 +904,36 @@ def test_step4_reconciles_against_the_matching_prior_round(repo):
     assert not (ws / rd / "scan-vs-round-02.json").exists()
     # The pre-fix baseline is never written back over.
     assert (ws / rd / "scan.json").is_file()
+
+
+@requires_bash
+def test_step4_index_substitutes_every_path_and_leaves_no_dead_link(repo):
+    """The index is the one file a reader opens, so a dead link in it is the
+    most expensive kind: it is indistinguishable from a live one until clicked,
+    and by then the reader has stopped trusting the file.
+
+    The regeneration is a full rewrite from the template, never an edit of the
+    live file - that is what removes half-updated state - and `ROUND` is the
+    only path placeholder, so the paths cannot be half-substituted either."""
+    rd = _bootstrap(repo)
+    ws = repo / ".code-winnow"
+    for name in ("report.md", "fixplan.md", "notes.md", "agent-A.md",
+                 "agent-B.md", "agent-E.md"):
+        (ws / rd / name).write_text("x\n", encoding="utf-8")
+
+    p = run_block(_find_block('sed "s|ROUND|')[2], str(repo))
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+
+    index = (ws / "README.md").read_text(encoding="utf-8")
+    assert "ROUND/" not in index, "a path placeholder survived the rewrite"
+    assert f"{rd}/report.md" in index
+
+    # Every link the block itself produced must resolve. The three passes that
+    # did not run still have rows; their links are dropped by hand at Step 4,
+    # which is prose, so this checks only what the substitution wrote.
+    dead = [h for h in re.findall(r"\]\(([^)]+)\)", index)
+            if not h.startswith(("http://", "https://", "#"))
+            and not (ws / h).exists()
+            and os.path.basename(h) not in
+            ("agent-S.md", "agent-C.md", "agent-D.md")]
+    assert not dead, f"dead links in the regenerated index: {dead}"

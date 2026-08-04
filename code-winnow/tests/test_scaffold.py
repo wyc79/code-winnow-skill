@@ -117,3 +117,47 @@ def test_round_templates_carry_the_identity_block(path):
     assert re.search(r"(?m)^Round:", text)
     assert re.search(r"(?m)^Compared:", text)
     assert re.search(r"(?m)^Generated:", text)
+
+
+def test_every_relative_link_in_a_filled_index_resolves(tmp_path):
+    """The index is the one file a reader opens. A row for a pass that never
+    ran must lose its link: a dead link is indistinguishable from a live one
+    until it is clicked, and by then the reader has stopped trusting the file.
+
+    Absolute URLs are exempt. A repo-root-relative path is not, and must fail -
+    `.code-winnow/round-02/report.md` renders perfectly and 404s."""
+    ws = tmp_path / ".code-winnow"
+    rd = ws / "round-02"
+    rd.mkdir(parents=True)
+    for name in ("report.md", "fixplan.md", "notes.md",
+                 "agent-A.md", "agent-B.md", "agent-E.md"):
+        (rd / name).write_text("x\n", encoding="utf-8")
+
+    filled = read(ROOT_README).replace("ROUND", "round-02")
+    # S, C and D did not run: the row stays, the link goes.
+    for missing in ("agent-S.md", "agent-C.md", "agent-D.md"):
+        filled = filled.replace(f"[{missing}](round-02/{missing})", missing)
+    (ws / "README.md").write_text(filled, encoding="utf-8")
+
+    dead = []
+    for href in re.findall(r"\]\(([^)]+)\)", filled):
+        if href.startswith(("http://", "https://", "#")):
+            continue
+        if not os.path.isfile(os.path.join(str(ws), href)):
+            dead.append(href)
+    assert not dead, f"dead links in the index: {dead}"
+
+
+def test_a_filled_index_keeps_no_markers():
+    """An empty cell says "not known". A surviving <fill says the agent stopped
+    halfway. They are different facts and only one is acceptable."""
+    filled = (read(ROOT_README)
+              .replace("ROUND", "round-02")
+              .replace("<fill: branch @ side vs base @ sha (scope), "
+                       "YYYY-MM-DD HH:MM>", "main @ worktree, 2026-08-03 19:09")
+              .replace("<fill: counts>", "")
+              .replace('<fill: links, or "none">', "none"))
+    assert "<fill" not in filled, (
+        "the marker strings in this test have drifted from the template - the "
+        "template is canonical, so update the test")
+    assert "ROUND/" not in filled

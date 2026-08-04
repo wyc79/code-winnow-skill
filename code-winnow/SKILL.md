@@ -808,6 +808,28 @@ Not three sentences, not a proposed patch, not a severity debate. If there are m
 
 If the pre-existing list is longer than the in-scope list, say so in one line — "this file has more going on than your change does, want a proper pass over it?" — and let the user decide. Deciding for them turns a five-minute review into an afternoon.
 
+### Regenerate the index — the last action of Step 4
+
+`.code-winnow/README.md` is the one file a reader opens. Rewrite it **in full** from the template; never edit the live file, so there is no half-updated state and no marker to preserve.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
+sed "s|ROUND|$(basename "$ROUND")|g" "$WINNOW/scaffold/root/README.md" \
+  > .code-winnow/README.md
+```
+
+That handles every path in one substitution. Fill the rest by hand, from what you already hold:
+
+- The `Current round:` line, out of `$ROUND/meta.json` — branch, side, base, sha, scope, timestamp.
+- The **This round** column, from the counts the conflict check just produced — `14 live, 3 P1`, `9 items, APPROVED`, `4 notes`. Leave a cell blank rather than guessing.
+- **Previous rounds**, one link per `round-NN/` directory, oldest first.
+
+**Replace every placeholder, including by nothing.** A blank cell says the count is not known; a leftover placeholder says you stopped halfway. They are different facts and the tests fail on the second.
+
+**A pass that did not run keeps its row and loses its link** — the bare filename as plain text, and `not dispatched` in the last column. Deleting the row would make a skipped pass indistinguishable from a pass this skill does not have, and a link to a file nobody wrote is a dead link in the first place a reader looks.
+
+**Links resolve against `.code-winnow/`, not the repo root.** `round-02/report.md`, never `.code-winnow/round-02/report.md` — the second renders perfectly and 404s on click.
+
 ## Step 4b — Record the approved set, and choose how to apply it
 
 **Wait for explicit go-ahead.** This is the gate. If nobody is there to give one, write the fix plan and **stop there**. See the unattended table; an unattended run never edits.
