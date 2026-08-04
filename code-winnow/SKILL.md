@@ -109,19 +109,33 @@ Before writing anything — including `.code-winnow/substitutions.md` — ensure
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-EXDIR="$(git rev-parse --git-common-dir)/info"   # --git-common-dir, NOT --git-dir
+WINNOW="<absolute path to this skill's directory>"   # quoted — see Step 1
+EXDIR="$(git rev-parse --git-common-dir)/info"       # --git-common-dir, NOT --git-dir
 mkdir -p "$EXDIR" .code-winnow
 grep -qxF '.code-winnow/' "$EXDIR/exclude" 2>/dev/null \
   || printf '\n.code-winnow/\n' >> "$EXDIR/exclude"
 
-git check-ignore -q .code-winnow/ \
-  && echo "workspace excluded" \
-  || echo "EXCLUSION FAILED — stop here, write nothing"
+if git check-ignore -q .code-winnow/; then
+  echo "workspace excluded"
+else
+  echo "EXCLUSION FAILED — stop here, write nothing"
+  exit 1
+fi
+
+# The root scaffold, copied only now that the exclusion has been verified —
+# writing it into an unexcluded workspace is the exact self-dirtying this step
+# exists to prevent. Per-file existence tests, never `cp -n`: that flag is a
+# GNU/BSD extension, and a shell that ignores it overwrites a populated index
+# with a blank skeleton and carries on. This step is idempotent and cold entry
+# at Step 5 re-runs it, so clobbering here is not hypothetical.
+mkdir -p .code-winnow/utils
+[ -f .code-winnow/README.md ] \
+  || cp "$WINNOW/scaffold/root/README.md" .code-winnow/README.md
 ```
 
-**Verify, do not assume.** If that last line prints the failure, stop and tell the user.
+**Verify, do not assume.** If the failure line prints, stop and tell the user. The `exit 1` is what stops the scaffold copy below it from running anyway.
 
-Three things in that block are load-bearing and each has a near-miss that looks right: `--git-common-dir` rather than `--git-dir`, `printf` rather than `echo`, and the `mkdir -p`. Do not simplify any of them — `DESIGN.md` has what each one prevents.
+Five things in that block are load-bearing and each has a near-miss that looks right: `--git-common-dir` rather than `--git-dir`, `printf` rather than `echo`, the `mkdir -p`, the `[ -f … ] ||` guard rather than `cp -n`, and the copy sitting *after* the check rather than beside it. Do not simplify any of them — `DESIGN.md` has what each one prevents.
 
 Use `.gitignore` only if the user wants the exclusion shared with their team, and only after telling them it will appear in the diff.
 
@@ -295,19 +309,33 @@ Five shapes, and the scope is in the name deliberately: Step 4's reconciliation 
 
 ```
 .code-winnow/
-  env.sh                     this run's state
-  declined.json              persistent across runs
-  perf-declined.md           persistent across runs — Agent D's notes the user dismissed
-  <stem>.md                  this run's report
-  <stem>.notes.md            this run's performance notes (Agent D) — never applied
-  <stem>.fixplan.md          this run's plan
-  <stem>.json, .input.diff, .pre-fix/, .tests-*.list
-  round-01/ … round-NN/      every previous run, archived by Step 2
+  README.md            the index — regenerated at the end of every round
+  env.sh               this run's state
+  declined.json        persistent across runs
+  perf-declined.md     persistent across runs — Agent D's notes the user dismissed
+  substitutions.md     persistent across runs — companion-skill substitutes
+  utils/               helper scripts a run wrote, shared across rounds
+  round-01/
+  round-02/
+    README.md          what is in a round folder
+    meta.json          what this round compared to what
+    report.md  fixplan.md  notes.md
+    agent-S.md  agent-A.md  agent-B.md  agent-C.md  agent-D.md  agent-E.md
+    scan.json          the pre-fix baseline, written once in Step 2
+    scan-postfix.json  scan-preexisting.json  scan-vs-round-01.json
+    input.diff
+    tests-before.txt  tests-before.list  tests-after.list
+    pre-fix/           Step 5a backup
+    scratch/           everything else this run produced
 ```
 
-**The root only ever holds the run in progress.** Step 2 moves the previous run's dated artifacts into the next `round-NN/` before writing anything. Prior rounds stay readable and stay reachable by `--since`; nothing is deleted.
+**The root holds no run artifacts at all.** Every file a round produces lives in that round's directory from the moment it is written, and nothing is ever moved between rounds. Rotation is `mkdir`. Prior rounds stay readable and stay reachable by `--since`; nothing is deleted.
 
-**The two persistent files survive that rotation because neither name starts with `current`**, which is the stem prefix the archive glob matches. That is what makes "declined" mean *permanently* declined. A rename that gave either file a stem-shaped name would silently turn every settled answer back into an open question.
+**The per-round file list above is exhaustive.** Anything a run generates that is not on it goes in `round-NN/scratch/`, and any script it writes goes in `.code-winnow/utils/`. Both directories ship in the scaffold and therefore already exist when an agent needs one — which is the difference between a rule that is obeyed and a rule that is merely read. A previous run left nine intermediate files at the workspace root because no rule named them, so no rule constrained where they landed.
+
+**Filenames inside a round say nothing about what was reviewed**, which is the point — they are short and identical every round. The scope lives in `meta.json` and in the three-line identity block at the top of every markdown file. Never reconstruct it from a filename.
+
+**The persistent files stay at the root, and that no longer depends on an accident.** It used to rest on none of their names starting with `current`, the prefix the archive glob matched; now nothing globs the root, so it is structural. That is what makes "declined" mean *permanently* declined.
 
 Stdlib only, no install step. Paths resolve against the git toplevel, so the cwd does not matter as long as it is inside the repo. The default pass gives in-scope findings; that is the run that matters. `--whole-files` widens to the untouched lines *of the files the diff already touches* — no further. There is no repo-wide mode.
 
@@ -382,20 +410,16 @@ if [ -z "$STEM" ]; then
 fi
 rm -f "$ERRF"
 
-# Archive the previous run before this one writes anything. Rotating HERE and
-# not in Step 0 is deliberate: cold entry at Step 5 re-runs Step 0, and
-# rotating there would archive the fix plan the cold session was invoked to
-# execute.
-PREV=$(find .code-winnow -maxdepth 1 -type f -name 'current*' ! -name "$STEM*" \
-       -o -maxdepth 1 -type d -name '*.pre-fix' ! -name "$STEM*" 2>/dev/null)
-if [ -n "$PREV" ]; then
-  N=$(printf '%02d' $(( $(ls -d .code-winnow/round-* 2>/dev/null | wc -l) + 1 )))
-  mkdir -p ".code-winnow/round-$N"
-  printf '%s\n' "$PREV" | while IFS= read -r p; do
-    [ -n "$p" ] && mv "$p" ".code-winnow/round-$N/"
-  done
-  echo "archived the previous run to .code-winnow/round-$N/"
-fi
+# This run gets a new round folder, and nothing is moved. A completed round is
+# already whole in its own directory, and the root never held this run's
+# artifacts to begin with. Creating it HERE and not in Step 0 is deliberate:
+# cold entry at Step 5 re-runs Step 0, and creating a round there would orphan
+# the fix plan the cold session was invoked to execute.
+N=$(printf '%02d' $(( $(ls -d .code-winnow/round-* 2>/dev/null | wc -l) + 1 )))
+ROUND=".code-winnow/round-$N"
+mkdir -p "$ROUND"
+cp -a "$WINNOW/scaffold/round/." "$ROUND/"
+echo "this run is round-$N"
 
 # One definition point for every later block. Written fresh each run.
 # The function goes IN the file: it is needed in later shells, and a shell
@@ -419,16 +443,19 @@ FUNC
   printf 'PY=%q\n'     "$PY"
   printf 'SCOPE=%q\n'  "$SCOPE"
   printf 'STEM=%q\n'   "$STEM"
-  printf 'BACKUP=%q\n' ".code-winnow/$STEM.pre-fix"
+  printf 'ROUND=%q\n'  "$ROUND"
+  printf 'BACKUP=%q\n' "$ROUND/pre-fix"
 } >> .code-winnow/env.sh
 
 . .code-winnow/env.sh
 printf 'SNAPSHOT=%q\n' "$(snapshot)" >> .code-winnow/env.sh
 
 . .code-winnow/env.sh
+"$PY" "$WINNOW/scripts/scan.py" $SCOPE --stem "$STEM" --meta "$ROUND" \
+  > "$ROUND/meta.json"
 "$PY" "$WINNOW/scripts/scan.py" $SCOPE --stem "$STEM" --json \
-  > ".code-winnow/$STEM.json"
-echo "stem $STEM"
+  > "$ROUND/scan.json"
+echo "stem $STEM, round $N"
 ```
 
 **Every later block opens by reloading it**, because shell state does not survive between tool calls:
