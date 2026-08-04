@@ -26,7 +26,8 @@ sequence fails - which is exactly how four defects shipped.
 
 What this cannot cover: Steps 3, 3.5 and 4 are agent judgment - three prompts,
 the conflict arbitration, the report. This covers the mechanical spine only:
-Step 0, 1, 2, the review-input builder, 5a and 6.
+Step 0, 1, 2, the review-input builder, Step 4's baseline reconciliation, 5a
+and 6.
 """
 
 import json
@@ -84,8 +85,9 @@ SPINE = [
     ("step1", "# QUOTE IT"),
     ("step2", "rm -f .code-winnow/env.sh"),
     ("step3", "Ask the scanner what it actually reviewed"),
+    ("step4", "PRIOR=$("),
     ("step5a", "scripts/backup.py"),
-    ("step6", '--since ".code-winnow/$STEM.json" $DECLINED'),
+    ("step6", '--since "$ROUND/scan.json" $DECLINED'),
 ]
 
 
@@ -298,10 +300,8 @@ def test_review_input_never_contains_an_untracked_binary(repo):
     p = run_block(_find_block("Ask the scanner what it actually reviewed")[2],
                   str(repo))
     assert p.returncode == 0, p.stdout + p.stderr
-    stem = re.search(r"STEM=(\S+)",
-                     (repo / ".code-winnow" / "env.sh").read_text(
-                         encoding="utf-8")).group(1).strip("'\"")
-    raw = (repo / ".code-winnow" / f"{stem}.input.diff").read_bytes()
+    raw = next((repo / ".code-winnow").glob(
+        "round-*/input.diff")).read_bytes()
     assert b"\x00" not in raw, "the review input carries NUL bytes"
     raw.decode("utf-8")           # must not raise
     text = raw.decode("utf-8")
@@ -394,7 +394,7 @@ def test_review_input_is_never_empty_when_the_scanner_found_files(repo):
 
     p = run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(repo))
     assert p.returncode == 0, f"input builder refused:\n{p.stdout}{p.stderr}"
-    diffs = list((repo / ".code-winnow").glob("*.input.diff"))
+    diffs = list((repo / ".code-winnow").glob("round-*/input.diff"))
     assert diffs, "no input.diff written"
     assert diffs[0].stat().st_size > 0, "review input is empty"
 
@@ -424,7 +424,7 @@ def test_review_input_on_a_clean_tree_branch_review(tmp_path):
     run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(tmp_path), subs)
     run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(tmp_path))
 
-    diffs = list((tmp_path / ".code-winnow").glob("*.input.diff"))
+    diffs = list((tmp_path / ".code-winnow").glob("round-*/input.diff"))
     assert diffs and diffs[0].stat().st_size > 0, (
         "clean-tree branch review produced an empty review input - the agents "
         "would report nothing while the scanner holds findings")
@@ -533,7 +533,7 @@ def test_review_input_on_a_branch_review_includes_uncommitted_work(tmp_path):
     run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(tmp_path), subs)
     run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(tmp_path))
 
-    diffs = list((tmp_path / ".code-winnow").glob("*.input.diff"))
+    diffs = list((tmp_path / ".code-winnow").glob("round-*/input.diff"))
     assert diffs, "no input.diff written"
     text = diffs[0].read_text(encoding="utf-8", errors="replace")
     assert "UNCOMMITTED_MARKER" in text, (
@@ -546,19 +546,24 @@ def test_review_input_on_a_branch_review_includes_uncommitted_work(tmp_path):
 # --------------------------------------------------------------------------
 
 def _bootstrap(path):
-    """Run Steps 0-2 in separate shells and return the pinned $STEM."""
-    subs = {"<absolute path to this skill's directory>": WINNOW}
+    """Run Steps 0-2 in separate shells and return this run's round
+    directory name, e.g. "round-01".
+
+    Every artifact path derives from the round now. The stem still
+    identifies the run inside meta.json and the report headers; it just
+    does not name files, so a test that needs a path asks for the round."""
     run_block(_find_block("EXCLUSION FAILED")[2], str(path), WINNOW_SUBS)
-    run_block(_find_block("# QUOTE IT")[2], str(path), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(path), subs)
-    got = run_block('. .code-winnow/env.sh; printf %s "$STEM"', str(path))
-    stem = got.stdout.strip()
-    assert stem, f"bootstrap yielded no STEM:\n{got.stdout}{got.stderr}"
-    return stem
+    run_block(_find_block("# QUOTE IT")[2], str(path), WINNOW_SUBS)
+    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(path),
+              WINNOW_SUBS)
+    got = run_block('. .code-winnow/env.sh; printf %s "$ROUND"', str(path))
+    round_dir = got.stdout.strip()
+    assert round_dir, f"bootstrap yielded no ROUND:\n{got.stdout}{got.stderr}"
+    return os.path.basename(round_dir)
 
 
 PLAN_BODY = """Skill:    {winnow}
-Backup:   .code-winnow/{stem}.pre-fix/
+Backup:   .code-winnow/{round}/pre-fix/
 
 ## Code fixes - approved
 
@@ -576,13 +581,14 @@ Backup:   .code-winnow/{stem}.pre-fix/
 """
 
 
-def _write_plan(repo, stem, status_line):
+def _write_plan(repo, round_dir, status_line):
     """A minimal well-formed plan; `status_line` None omits the line entirely."""
-    head = f"# Fix plan - {stem}\n"
+    head = (f"# Fix plan\n\n"
+            f"Round:     {round_dir[-2:]}  -  .code-winnow/{round_dir}/\n")
     if status_line is not None:
         head += status_line + "\n"
-    p = repo / ".code-winnow" / f"{stem}.fixplan.md"
-    p.write_text(head + PLAN_BODY.format(winnow=WINNOW, stem=stem),
+    p = repo / ".code-winnow" / round_dir / "fixplan.md"
+    p.write_text(head + PLAN_BODY.format(winnow=WINNOW, round=round_dir),
                  encoding="utf-8")
     return p
 
@@ -595,13 +601,13 @@ def _run_step5a(repo):
 def test_step5a_backs_up_an_approved_plan(repo):
     """The positive case, so the refusal tests below are not vacuously green
     against a script that refuses everything."""
-    stem = _bootstrap(repo)
-    _write_plan(repo, stem, "Status:   APPROVED by the user on 2026-08-02")
+    rd = _bootstrap(repo)
+    _write_plan(repo, rd, "Status:   APPROVED by the user on 2026-08-02")
     p = _run_step5a(repo)
     out = p.stdout + p.stderr
     assert "REFUSING" not in out, out
     assert "backed up 1 file(s)" in p.stdout, out
-    assert (repo / ".code-winnow" / f"{stem}.pre-fix" / "feature.py").is_file()
+    assert (repo / ".code-winnow" / rd / "pre-fix" / "feature.py").is_file()
 
 
 @requires_bash
@@ -610,9 +616,9 @@ def test_step5a_refuses_a_plan_item_with_no_file_line(repo):
     so the copy silently under-collects and then prints a success count derived
     from the same regex that just missed it - and the file is edited with no
     restore point. Refusing is the only safe reading."""
-    stem = _bootstrap(repo)
-    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
-        f"# Fix plan - {stem}\n"
+    rd = _bootstrap(repo)
+    (repo / ".code-winnow" / rd / "fixplan.md").write_text(
+        "# Fix plan\n"
         "Status:   APPROVED by the user on 2026-08-03\n\n"
         "## Code fixes - approved\n\n"
         "- [ ] P1 bare except in feature.py line 4 swallows the loader error\n"
@@ -623,7 +629,7 @@ def test_step5a_refuses_a_plan_item_with_no_file_line(repo):
     out = p.stdout + p.stderr
     assert "REFUSING" in out, f"backed up a plan item naming no file:\n{out}"
     assert "no `file:` line" in out, out
-    assert not (repo / ".code-winnow" / f"{stem}.pre-fix").exists()
+    assert not (repo / ".code-winnow" / rd / "pre-fix").exists()
 
 
 def test_every_reference_path_named_in_the_docs_exists():
@@ -669,12 +675,12 @@ def test_step5a_refuses_a_plan_that_is_not_approved(repo, status, why):
     path asking the executor to stop on UNAPPROVED, which waved through every
     plan carrying no Status line - so the marked case was refused and the
     unmarked case was not, exactly backwards."""
-    stem = _bootstrap(repo)
-    _write_plan(repo, stem, status)
+    rd = _bootstrap(repo)
+    _write_plan(repo, rd, status)
     p = _run_step5a(repo)
     out = p.stdout + p.stderr
     assert "REFUSING" in out, f"applied a plan with {why}:\n{out}"
-    assert not (repo / ".code-winnow" / f"{stem}.pre-fix").exists(), \
+    assert not (repo / ".code-winnow" / rd / "pre-fix").exists(), \
         "refused, but still made a backup - the refusal came too late"
 
 
@@ -730,8 +736,8 @@ def test_step5a_refuses_the_notes_document_on_its_status_line(repo):
     mutation harness caught exactly that. Layered gates are the right design;
     a test that cannot say which one fired is not.
     """
-    stem = _bootstrap(repo)
-    (repo / ".code-winnow" / f"{stem}.fixplan.md").write_text(
+    rd = _bootstrap(repo)
+    (repo / ".code-winnow" / rd / "fixplan.md").write_text(
         _notes_template(), encoding="utf-8")
     p = _run_step5a(repo)
     out = p.stdout + p.stderr
@@ -740,7 +746,7 @@ def test_step5a_refuses_the_notes_document_on_its_status_line(repo):
     assert "Status reads" in out, (
         "refused, but not on the Status line - the notes document's "
         f"`Status: NOT APPLIED` is no longer what stops it:\n{out}")
-    assert not (repo / ".code-winnow" / f"{stem}.pre-fix").exists(), \
+    assert not (repo / ".code-winnow" / rd / "pre-fix").exists(), \
         "refused, but still made a backup - the refusal came too late"
 
 
@@ -752,10 +758,10 @@ def test_baseline_json_exists_before_step_3_needs_it(repo):
     run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
 
     # Ask the shell, don't parse the file: %q quoting is not always single-quoted.
-    got = run_block('. .code-winnow/env.sh; printf %s "$STEM"', str(repo))
-    stem = got.stdout.strip()
-    assert stem, f"env.sh yielded no STEM:\n{got.stdout}{got.stderr}"
-    baseline = repo / ".code-winnow" / f"{stem}.json"
+    got = run_block('. .code-winnow/env.sh; printf %s "$ROUND"', str(repo))
+    round_dir = got.stdout.strip()
+    assert round_dir, f"env.sh yielded no ROUND:\n{got.stdout}{got.stderr}"
+    baseline = repo / round_dir / "scan.json"
     assert baseline.is_file(), "Step 2 must write the baseline JSON"
     data = json.loads(baseline.read_text(encoding="utf-8"))
     assert data["findings"], "baseline holds no findings for a repo with chaff"
@@ -837,3 +843,47 @@ def test_backup_still_refuses_a_destination_pasted_from_the_header(tmp_path):
     assert p.returncode != 0
     out = p.stdout + p.stderr
     assert "REFUSING" in out and "parenthetical" in out
+
+
+# --------------------------------------------------------------------------
+# Step 4's reconciliation picks its baseline from meta.json
+# --------------------------------------------------------------------------
+
+@requires_bash
+def test_step4_reconciles_against_the_matching_prior_round(repo):
+    r"""The baseline used to be found with
+    `ls -1t round-*/*.json | grep -v -- '-postfix\|-p3\|-r2'`, a blocklist of
+    ad-hoc suffixes that grew every time an agent invented one, plus a line of
+    prose asking the reader to eyeball the stem's scope segment.
+
+    Both failed the same way and quietly. A branch baseline reconciled against
+    a worktree re-scan reports every untouched finding as `resolved`, which
+    reads as "your fixes worked" for findings nobody touched. meta.json's
+    `scope` makes the match structural."""
+    ws = repo / ".code-winnow"
+    ws.mkdir(exist_ok=True)
+    # A newer round that reviewed something else, and an older one that did not.
+    for name, scope, when in (("round-01", "worktree", "2026-01-01T00:00:00"),
+                              ("round-02", "branch vs main",
+                               "2026-06-01T00:00:00")):
+        (ws / name).mkdir(parents=True, exist_ok=True)
+        (ws / name / "meta.json").write_text(
+            json.dumps({"round": int(name[-2:]), "scope": scope,
+                        "generated": when}), encoding="utf-8")
+        (ws / name / "scan.json").write_text(
+            json.dumps({"findings": [], "resolved": [], "out_of_scope": [],
+                        "declined": []}), encoding="utf-8")
+
+    rd = _bootstrap(repo)                       # round-03, worktree scope
+    meta = json.loads((ws / rd / "meta.json").read_text(encoding="utf-8"))
+    assert meta["prior_round"] == "round-01", (
+        "picked the more recent round rather than the matching one: "
+        f"{meta['prior_round']}")
+
+    p = run_block(_find_block("PRIOR=$(")[2], str(repo))
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert (ws / rd / "scan-vs-round-01.json").is_file(), \
+        f"no reconciliation output written; block said:\n{p.stdout}{p.stderr}"
+    assert not (ws / rd / "scan-vs-round-02.json").exists()
+    # The pre-fix baseline is never written back over.
+    assert (ws / rd / "scan.json").is_file()

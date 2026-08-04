@@ -15,17 +15,19 @@ Generated code fails review in predictable ways. It is rarely wrong; it is bloat
 
 | Step | What it does | Writes |
 |---|---|---|
-| **0** | Git-excludes `.code-winnow/`, creates it, **verifies** | `.git/info/exclude` |
-| — | Read `core-patterns.md` and `comment-evidence.md`; check companion skills | `.code-winnow/substitutions.md` |
+| **0** | Git-excludes `.code-winnow/`, **verifies**, lays down the root scaffold | `.git/info/exclude`, `README.md`, `utils/` |
+| — | Read `core-patterns.md` and `comment-evidence.md`; check companion skills | `substitutions.md` |
 | **1** | Resolve the review scope; if a feature was named, dispatch **Agent S** and confirm the boundary with the user | — |
-| **2** | Deterministic scan; pin the stem; archive the previous run | `env.sh`, `<stem>.json`, `round-NN/` |
-| **3** | Build the review input, then dispatch **A B C D E** in parallel | `<stem>.input.diff` |
+| **2** | Deterministic scan; pin the stem; **create this run's round** | `env.sh`, `round-NN/{meta.json,scan.json}` |
+| **3** | Build the review input, then dispatch **A B C D E** in parallel | `round-NN/input.diff` |
 | **3.5** | Conflict check — merge their outputs across ten classes, yourself | — |
-| **4** | Write the report and the performance notes. **Never edits** | `<stem>.md`, `<stem>.notes.md` |
-| **4b** | Wait for approval; write the fix plan; choose a rung | `<stem>.fixplan.md` |
-| **5a** | Back up every file the plan names; record the test baseline | `<stem>.pre-fix/`, `.tests-before.*` |
+| **4** | Write the report and the performance notes, then regenerate the index. **Never edits** | `round-NN/{report.md,notes.md}`, `README.md` |
+| **4b** | Wait for approval; write the fix plan; choose a rung | `round-NN/fixplan.md` |
+| **5a** | Back up every file the plan names; record the test baseline | `round-NN/{pre-fix/,tests-before.*}` |
 | **5b** | Apply the approved items, located by normalised anchor | the user's files |
-| **6** | Deletion-safety pass → test comparison → re-scan and reconcile | `<stem>-postfix.json`, `.tests-after.list` |
+| **6** | Deletion-safety pass → test comparison → re-scan and reconcile | `round-NN/{scan-postfix.json,tests-after.list}` |
+
+Everything a run writes is inside `.code-winnow/round-NN/`, under a fixed short name. The root holds the index, the persistent files and `utils/`, and nothing is ever moved between rounds. `round-NN/README.md` lists the folder's contents; `round-NN/meta.json` records what the round compared to what.
 
 Reference files, all under `$WINNOW/references/`: `core-patterns.md` (universal judgment standard, **read it yourself**), `comment-evidence.md` (the X1 grading rule — **also yours**, and nobody else's), `docstrings.md` (Agent B's, and C's), `agent-prompts.md` (the six dispatch prompts), `report-format.md` (every artifact's shape), `fragility.md`, `performance.md`, `tests.md`, `portability.md`, and one per claimed language — `python.md`, `csharp-unity.md`, `cpp-ue5.md`. Each file names its own readers at the top; hand an agent what its prompt asks for and nothing else, since every extra file is paid five times over on a parallel run. `$WINNOW/scripts/scan.py` is the scanner; `$WINNOW/scripts/backup.py` is Step 5a. Maintainers editing the snippets in this file should read `DESIGN.md` in the repo root, which holds the near-miss rationale for every mechanical choice below.
 
@@ -537,9 +539,9 @@ emit_untracked() {
     git diff HEAD 2>/dev/null || git diff --cached   # unborn HEAD: no commit yet
   fi
   emit_untracked
-} > ".code-winnow/$STEM.input.diff"
+} > "$ROUND/input.diff"
 
-[ -s ".code-winnow/$STEM.input.diff" ] || {
+[ -s "$ROUND/input.diff" ] || {
   echo "review input is empty but the scanner found files — do NOT dispatch"; exit 1; }
 ```
 
@@ -676,28 +678,44 @@ Never edit in this step.
 
 ### Naming and dating the report
 
-Never write `report.md`. Use `$STEM` from Step 2 so successive runs never overwrite each other and so the file says what it reviewed. Write `.code-winnow/<stem>.md`, the human report; `.code-winnow/<stem>.json` already exists from Step 2. Put the generated timestamp, the scope, and the two branch names in the document header as well — filenames get copied into chat and lose their context.
+Write `$ROUND/report.md`. `$ROUND/scan.json` already exists from Step 2.
+
+**The filename no longer says what was reviewed, so the file has to.** Every markdown file a round writes — `report.md`, `fixplan.md`, `notes.md` and every `agent-*.md` — opens with the identity block:
+
+```
+Round:     02  —  .code-winnow/round-02/
+Compared:  feat-golden-eval @ worktree   vs   main @ 69a5604   (branch scope)
+Generated: 2026-08-03 19:09
+```
+
+Copy those values out of `$ROUND/meta.json`; do not retype them from memory. This is the block that makes a report readable when its path has been pasted into chat without its context — the job the stem used to do badly.
 
 **Every JSON the run writes gets its own filename.** `<stem>.json` is the pre-fix baseline, written once in Step 2 and never again — Step 6 reads it. `--since X.json --json > X.json` truncates the baseline before Python opens it, so `--since` reads an empty file and the baseline is gone. New name out, baseline in:
 
 ```bash
 # illustration only — the shape Step 6 uses
 "$PY" "$WINNOW/scripts/scan.py" $SCOPE --stem "$STEM-postfix" --json \
-  --since ".code-winnow/$STEM.json" > ".code-winnow/$STEM-postfix.json"
+  --since "$ROUND/scan.json" > "$ROUND/scan-postfix.json"
 ```
 
 ### Reconciling with the previous run
 
-Find the most recent scanner JSON for the same scope and pass it to `--since`. **Look in the round folders, not just the root** — Step 2 archived the previous run there, so the root holds only this run:
+**`scan.py` already chose it.** `$ROUND/meta.json` carries `prior_round` — the newest round whose `scope` matches this one's, or `null`. Read the field; do not search the directory:
 
 ```bash
-# illustration only — the search, not a step to run
-ls -1t .code-winnow/round-*/*.json 2>/dev/null | grep -v -- '-postfix\|-p3\|-r2' | head -1
+cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
+PRIOR=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prior_round"] or "")' \
+        "$ROUND/meta.json")
+[ -n "$PRIOR" ] && "$PY" "$WINNOW/scripts/scan.py" $SCOPE \
+  --stem "$STEM-vs-$PRIOR" --json --since ".code-winnow/$PRIOR/scan.json" \
+  > "$ROUND/scan-vs-$PRIOR.json"
 ```
 
-Exclude `$STEM.json`, which this run wrote minutes ago, and the derived `-postfix`, `-vs-` and `-preexisting` outputs. **Check the stem's scope segment matches too** — `_worktree_` against `_worktree_`, `_target<base>_` against the same base. A stem carries its scope precisely so this comparison can be made, and `ls -1t` alone does not make it.
+This used to be `ls -1t .code-winnow/round-*/*.json | grep -v -- '-postfix\|-p3\|-r2'` plus a line of prose telling you to eyeball the stem's scope segment. Both failed the same way: the exclusion list was a blocklist of ad-hoc suffixes that grew every time an agent invented one, and the scope check was advisory. **A branch baseline reconciled against a worktree re-scan reports every untouched finding as `resolved`**, which reads as "your fixes worked" for findings nobody touched.
 
-Write the reconciled output to `.code-winnow/$STEM-vs-<prior stem>.json`; never back over `$STEM.json`, which Step 6 still needs as the pre-fix baseline. If no earlier run exists, say "Previous run: none" and skip `--since` entirely. The scanner marks each live finding `new` or `persisting`, and returns the ones present last time and absent now in `resolved`. Matching is by file, rule, message, and the normalised source line.
+Rounds written before `meta.json` existed carry no scope and are never chosen, so the first run after this change says "Previous run: none". A wrong baseline is worse than no baseline.
+
+Never write back over `$ROUND/scan.json`, which Step 6 still needs as the pre-fix baseline. The scanner marks each live finding `new` or `persisting`, and returns the ones present last time and absent now in `resolved`. Matching is by file, rule, message, and the normalised source line.
 
 Findings present before and absent now are **no longer true** — fixed, refactored away, or overtaken by events. Report them under their own heading and never re-list them as live. A punch list that keeps resurfacing settled items stops being read, and that failure is quiet: the user does not tell you they have started skimming.
 
@@ -737,7 +755,7 @@ If a P3-only list runs past a screen, cut it. Twenty cosmetic nits train the use
 
 ### The performance notes document
 
-Agent D's output goes to `.code-winnow/$STEM.notes.md` and nowhere else. It is not a section of the report, and **nothing in it enters the fix plan or is ever applied.** The shape and its three guards are in `report-format.md`.
+Agent D's output goes to `$ROUND/notes.md` and nowhere else. It is not a section of the report, and **nothing in it enters the fix plan or is ever applied.** The shape and its three guards are in `report-format.md`.
 
 **Write the document even when D found nothing** — an empty Notes section and a line saying the pass ran. A missing file is indistinguishable from a pass that was skipped, and those are different facts. When D was not dispatched at all, write no document and say so in the report header instead.
 
@@ -780,7 +798,7 @@ One section, one meaning: **problems in the files this change touches, on lines 
 Two sources feed it, and both are optional:
 
 - What the Step 3 agents noticed while reading around the diff. This is the usual source and needs no extra command.
-- `"$PY" "$WINNOW/scripts/scan.py" $SCOPE --whole-files --stem "$STEM-preexisting" --json > ".code-winnow/$STEM-preexisting.json"` — the same scan widened to the untouched lines of those same files. **This is the only thing that populates the scanner's `preexisting` findings**, so run it if you want the deterministic half; skip it on a large diff, where it mostly adds P3 noise. Either way, say which you did.
+- `"$PY" "$WINNOW/scripts/scan.py" $SCOPE --whole-files --stem "$STEM-preexisting" --json > "$ROUND/scan-preexisting.json"` — the same scan widened to the untouched lines of those same files. **This is the only thing that populates the scanner's `preexisting` findings**, so run it if you want the deterministic half; skip it on a large diff, where it mostly adds P3 noise. Either way, say which you did.
 
 Log every one in full to the report file. In the user-facing output, give each **at most two sentences: one for what it is, one for what it does.** Then stop. Expand only on request.
 
@@ -798,7 +816,7 @@ If the pre-existing list is longer than the in-scope list, say so in one line �
 
 ### The fix plan
 
-Once the user has approved a subset, write `.code-winnow/$STEM.fixplan.md` — **the shape is in `$WINNOW/references/report-format.md`**. It holds what the fix pass needs and nothing else, and it is the handoff contract for all three rungs below.
+Once the user has approved a subset, write `$ROUND/fixplan.md` — **the shape is in `$WINNOW/references/report-format.md`**. It holds what the fix pass needs and nothing else, and it is the handoff contract for all three rungs below.
 
 **`file:` is authoritative, not the prose.** Every item carries at least one `file:` line, and `line:` / `occurrence:` / `of:` / `anchor:` are the fields it pairs with; a merged X6 finding lists each group in order. The headline is for the reader. Prose is not a data format: `scripts/backup.py` parses `file:` lines and nothing else.
 
@@ -855,11 +873,11 @@ By Step 5 you are carrying the diff, the scanner JSON, every agent's output, the
 **Rung 1 — clear and resume. Offer this first.**
 
 ```
-Fix plan written to .code-winnow/<stem>.fixplan.md.
+Fix plan written to .code-winnow/round-NN/fixplan.md.
 
 To apply it with a clean context: /clear, then paste
 
-    code-winnow: apply .code-winnow/<stem>.fixplan.md
+    code-winnow: apply .code-winnow/round-NN/fixplan.md
 ```
 
 Say plainly what it buys, and do not oversell it: a long edit-and-test loop then runs against a small stable prefix instead of the whole review. Clearing does not carry the previous cache forward; the win is headroom and a clean prefix for the turns that follow.
@@ -893,7 +911,7 @@ The advertised default scope is uncommitted work *including untracked files*. "F
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
-"$PY" "$WINNOW/scripts/backup.py" "$BACKUP" ".code-winnow/$STEM.fixplan.md"
+"$PY" "$WINNOW/scripts/backup.py" "$BACKUP" "$ROUND/fixplan.md"
 ```
 
 **Any `REFUSING:` line means stop and tell the user.** Do not edit, and do not "fix" the plan by dropping the item that would not parse. The script refuses on six things, each of which fails silently without the guard: a missing or non-`APPROVED` `Status:` line, fix items appearing after `## Never touch`, a non-empty backup directory, a destination pasted from the plan header rather than computed, any `file:` path missing from disk, and an item with no `file:` line at all. Its module docstring has what each one prevents.
@@ -902,7 +920,7 @@ Nor should you reason that a tracked file is safe because git can restore it. Th
 
 Then tell the user, in one line, where the copies are and how to undo:
 
-> Backed up 7 files to `.code-winnow/currentmain_worktree_20260802-2028.pre-fix/`. To undo everything, from the repo root: `cp -a .code-winnow/currentmain_worktree_20260802-2028.pre-fix/. .` (PowerShell: `Copy-Item -Recurse -Force '.code-winnow\currentmain_worktree_20260802-2028.pre-fix\*' .`)
+> Backed up 7 files to `.code-winnow/round-02/pre-fix/`. To undo everything, from the repo root: `cp -a .code-winnow/round-02/pre-fix/. .` (PowerShell: `Copy-Item -Recurse -Force '.code-winnowound-02\pre-fix\*' .`)
 
 If the copy fails — read-only filesystem, no shell — **say so and stop.** Do not edit anyway. A cleanup that cannot be undone is not a cleanup the user agreed to, and "I could not make a backup" is a decision for them, not for you.
 
@@ -915,8 +933,8 @@ If the copy fails — read-only filesystem, no shell — **say so and stop.** Do
 ```bash
 # illustration only — substitute the project's real commands
 cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
-<the project's test command> 2>&1 | tee ".code-winnow/$STEM.tests-before.txt"
-<the runner's list command>   > ".code-winnow/$STEM.tests-before.list"
+<the project's test command> 2>&1 | tee "$ROUND/tests-before.txt"
+<the runner's list command>   > "$ROUND/tests-before.list"
 ```
 
 | Runner | Listing the collected tests |
@@ -988,8 +1006,8 @@ Finding the command: read the repo rather than guessing — `package.json` scrip
 ```bash
 # illustration only — substitute the project's real commands
 cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
-<the runner's list command> > ".code-winnow/$STEM.tests-after.list"
-diff ".code-winnow/$STEM.tests-before.list" ".code-winnow/$STEM.tests-after.list"
+<the runner's list command> > "$ROUND/tests-after.list"
+diff "$ROUND/tests-before.list" "$ROUND/tests-after.list"
 ```
 
 - Missing tests that a `tests-delta:` line declared → **expected.** Report them as "3 tests merged into 1 parametrized case, coverage preserved".
@@ -1007,8 +1025,8 @@ cd "$(git rev-parse --show-toplevel)"; . .code-winnow/env.sh
 DECLINED=""
 [ -f .code-winnow/declined.json ] && DECLINED="--declined .code-winnow/declined.json"
 "$PY" "$WINNOW/scripts/scan.py" $SCOPE --stem "$STEM-postfix" --json \
-  --since ".code-winnow/$STEM.json" $DECLINED \
-  > ".code-winnow/$STEM-postfix.json"
+  --since "$ROUND/scan.json" $DECLINED \
+  > "$ROUND/scan-postfix.json"
 ```
 
 `$SCOPE` matters most here. Omit it and this scan resolves a different scope from the baseline it is comparing against — a `--scope branch` review reconciled against a worktree re-scan reports every untouched finding as `resolved`, which reads as "your fixes worked" for findings nobody touched.
@@ -1055,14 +1073,16 @@ Only once this pass is clean, hand off to `superpowers:requesting-code-review` f
 
 ## Entering at Step 5 cold
 
-You were invoked with a fix plan rather than a review request — `code-winnow: apply .code-winnow/<stem>.fixplan.md`, or any phrasing that names one. The review already happened, in a session whose context is gone. Your job is to execute a list, not to form an opinion.
+You were invoked with a fix plan rather than a review request — `code-winnow: apply .code-winnow/round-NN/fixplan.md`, or any phrasing that names one. The review already happened, in a session whose context is gone. Your job is to execute a list, not to form an opinion.
 
 **First, check the `Status:` line — it must be present and must read `APPROVED`.** Anything else, including *no `Status:` line at all*, means stop: report that nobody has reviewed these findings and ask for approval before anything else. Absence is not permission. `scripts/backup.py` enforces this with a `REFUSING:` line so the gate does not depend on you remembering to read it here, but knowing why it refused saves a confused retry.
 
-1. Read the fix plan. It is self-contained: `Status`, `Skill` (your `$WINNOW`), `Scope`, `Feature`, `Baseline` (the pre-fix JSON for Step 6), `Backup`, `Undo`, `Verify`, then the fixes and the never-touch list. Each fix carries `file:`, `line:`, `occurrence:`, `of:`, `anchor:`, `fix:` and `evidence:` — **the first five are what locate the edit**, and the rules for using them are in Step 4b under "Locating a fix at execution time". Read that section; it is the one part of the review you do inherit. **`$STEM` is the plan's filename minus `.fixplan.md`.**
+1. Read the fix plan. It is self-contained: `Status`, `Skill` (your `$WINNOW`), `Scope`, `Feature`, `Baseline` (the pre-fix JSON for Step 6), `Backup`, `Undo`, `Verify`, then the fixes and the never-touch list. Each fix carries `file:`, `line:`, `occurrence:`, `of:`, `anchor:`, `fix:` and `evidence:` — **the first five are what locate the edit**, and the rules for using them are in Step 4b under "Locating a fix at execution time". Read that section; it is the one part of the review you do inherit. **`$ROUND` is the directory the plan sits in, and everything else derives from it** — the baseline is `$ROUND/scan.json`, the backup is `$ROUND/pre-fix`, and `$STEM` is `$ROUND/meta.json`'s `stem` field.
 2. Re-run the Step 0 block. It is idempotent and it verifies with `git check-ignore` — cheap insurance against a repo where the exclusion was lost or was never valid, which in a linked worktree it silently was not. This is the one part of Steps 0–4b you *do* run.
 
-   Then look at `.code-winnow/env.sh` before running anything that sources it. **It is from the session that wrote the plan, and it may name a different `$STEM`** — a later review in the same repo overwrites it, and a plan copied to another machine has none at all. Every block below opens with `. .code-winnow/env.sh`, so a stale file silently redirects the backup and the reconciliation to another run's filenames. If its `STEM` does not match the plan's own name, or the file is missing, set `WINNOW`, `PY`, `STEM` and `BACKUP` yourself at the top of each call. **Derive them from the plan's filename, not by copying its header values:** `STEM` is the filename minus `.fixplan.md`, and `BACKUP` is `.code-winnow/$STEM.pre-fix`. The header's `Skill:` line is the one field to read directly, because nothing else carries `$WINNOW`.
+   Then look at `.code-winnow/env.sh` before running anything that sources it. **It is from the session that wrote the plan, and it may name a different `$ROUND`** — a later review in the same repo overwrites it, and a plan copied to another machine has none at all. Every block below opens with `. .code-winnow/env.sh`, so a stale file silently redirects the backup and the reconciliation into another round's directory. If its `ROUND` does not match the directory the plan sits in, or the file is missing, set `WINNOW`, `PY`, `STEM`, `ROUND` and `BACKUP` yourself at the top of each call.
+
+   **Derive them from the plan's location, not by copying its header values.** `$ROUND` is the plan's own directory; `BACKUP` is `$ROUND/pre-fix`; the baseline is `$ROUND/scan.json`; and `STEM` is `$ROUND/meta.json`'s `stem` field. The header's `Skill:` line is the one field to read directly, because nothing else carries `$WINNOW`.
 
    The plan header is prose written for a human, and a value copied out of it arrives with whatever else is on that line — `Backup:` once carried a trailing `(NOT YET MADE)` marker, and the backup silently went to a directory of that name. `backup.py` now refuses a destination with a parenthetical in it, but the durable fix is to compute the path rather than parse it.
 3. Step 5a — the backup, from the plan's `file:` lines. Any `REFUSING:` line means stop and say so. Then run the `Verify:` command **before editing** and fill in `Tests-before:` yourself if the plan does not already carry it. A cold session inherits no memory of what was green, and Step 6 is a comparison against that number.
