@@ -2818,3 +2818,48 @@ def test_css_a_string_does_not_hide_a_real_comment_after_it(tmp_path):
           ".c { transition: all 0.2s; }\n")
     found = rules(str(tmp_path), "--paths", "a.css")
     assert found.get("css-transition-all") == [2], found
+
+
+# --------------------------------------------------------------------------
+# check_html comment handling
+#
+# The only one of the three web passes reading raw lines. Commented-out markup
+# is the commonest thing in an HTML file and it was all reportable.
+# --------------------------------------------------------------------------
+
+def test_html_rules_are_quiet_inside_a_comment(tmp_path):
+    write(tmp_path, "a.html",
+          '<!-- <button role="button">old</button> -->\n')
+    assert "html-redundant-role" not in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_rules_are_quiet_inside_a_multiline_comment(tmp_path):
+    write(tmp_path, "a.html",
+          "<!--\n"
+          '<button role="button">old</button>\n'
+          '<script type="text/javascript"></script>\n'
+          "-->\n")
+    found = rules(str(tmp_path), "--paths", "a.html")
+    assert "html-redundant-role" not in found
+    assert "html-obsolete-attr" not in found
+
+
+def test_html_rules_still_fire_after_a_closed_comment(tmp_path):
+    write(tmp_path, "a.html",
+          "<!-- old markup -->\n<button role=\"button\">Go</button>\n")
+    assert "html-redundant-role" in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_rules_still_fire_beside_a_trailing_comment(tmp_path):
+    """Blanking the span, not dropping the line: live markup and a comment
+    share a line constantly."""
+    write(tmp_path, "a.html",
+          '<button role="button">Go</button> <!-- keep -->\n')
+    assert "html-redundant-role" in rules(str(tmp_path), "--paths", "a.html")
+
+
+def test_html_a_conditional_comment_does_not_hide_live_markup_after_it(tmp_path):
+    write(tmp_path, "a.html",
+          "<!--[if lt IE 9]><script src=\"shim.js\"></script><![endif]-->\n"
+          '<button role="button">Go</button>\n')
+    assert "html-redundant-role" in rules(str(tmp_path), "--paths", "a.html")

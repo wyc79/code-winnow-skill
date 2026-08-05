@@ -372,6 +372,13 @@ MUTATIONS = [
      "                buf.append(ch); i += 1\n",
      "",
      "comment_marker_inside_a_string_does_not_latch or single_quoted_comment_marker"),
+
+    # check_html was the only web pass reading raw lines, so commented-out
+    # markup - the commonest thing in an HTML file - was all reportable.
+    ("web-html-comment-blanking", SCAN,
+     "    clean = _html_uncommented(lines)",
+     "    clean = lines",
+     "html_rules_are_quiet_inside_a_comment or html_rules_are_quiet_inside_a_multiline"),
 ]
 
 

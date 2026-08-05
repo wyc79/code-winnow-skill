@@ -2514,9 +2514,38 @@ def check_js(path, lines, findings):
                 "form drops Date, Map, Set and undefined", anchor)
 
 
+def _html_uncommented(lines):
+    """`lines` with every `<!-- -->` span blanked, tracked across line breaks.
+
+    Blanked rather than dropped, for the reason the CSS pass gives: live markup
+    and a comment share a line constantly, and dropping the line loses the
+    finding.
+
+    No string handling, and none is wanted. HTML attribute values cannot
+    contain a raw `<`, so `<!--` inside one is not expressible without an
+    entity - which is the opposite of CSS, where a quoted `/*` is ordinary and
+    was the whole latch. A conditional comment (`<!--[if lt IE 9]>`) is a
+    comment by this rule and closes on its `-->` like any other.
+    """
+    out = []
+    depth = 0
+    for text in lines:
+        buf, i, n = [], 0, len(text)
+        while i < n:
+            if depth == 0 and text.startswith("<!--", i):
+                depth = 1; buf.append("    "); i += 4
+            elif depth and text.startswith("-->", i):
+                depth = 0; buf.append("   "); i += 3
+            else:
+                buf.append(" " if depth else text[i]); i += 1
+        out.append("".join(buf))
+    return out
+
+
 def check_html(path, lines, findings):
+    clean = _html_uncommented(lines)
     for idx in range(1, len(lines) + 1):
-        text = lines[idx - 1]
+        text = clean[idx - 1]
         anchor = anchor_of(lines, idx)
 
         for pattern, element in HTML_REDUNDANT_ROLE:
