@@ -2758,17 +2758,6 @@ def test_js_a_comment_marker_inside_a_string_does_not_blank_the_line(tmp_path):
 
 def test_js_an_apostrophe_in_jsx_text_does_not_blank_the_rest_of_the_file(tmp_path):
     """Only a template literal survives a newline. Without the end-of-line
-    reset, `don't` in JSX text opens a string that never closes and every
-    line below it goes quiet - the same latch the CSS pass shipped once."""
-    write(tmp_path, "a.jsx",
-          "const El = () => <p>don't</p>;\ndebugger;\nconsole.log(1);\n")
-    found = rules(str(tmp_path), "--paths", "a.jsx")
-    assert "js-debugger" in found
-    assert "js-console" in found
-
-
-def test_js_an_apostrophe_in_jsx_text_does_not_blank_the_rest_of_the_file(tmp_path):
-    """Only a template literal survives a newline. Without the end-of-line
     reset, `don't` in JSX text opens a string that never closes and every line
     below it goes quiet - the same latch the CSS pass shipped once."""
     write(tmp_path, "a.jsx",
