@@ -349,6 +349,20 @@ MUTATIONS = [
      "    clean = _css_uncommented(lines)",
      "    clean = lines",
      "css_rules_are_quiet_inside_a_block_comment"),
+
+    # check_js used `strip_code`, which is a Python/C#/C++ lexer: it does not
+    # know a backtick opens a string, and it reads JS's private-name `#` as a
+    # comment marker. Reverting to it reports findings against strings and
+    # drops every rule on any line holding a private field.
+    ("web-js-lexer", SCAN,
+     "    clean = _js_uncommented(lines)\n"
+     "    for idx in range(1, len(lines) + 1):\n"
+     "        anchor = anchor_of(lines, idx)\n"
+     "        code = clean[idx - 1]",
+     "    for idx in range(1, len(lines) + 1):\n"
+     "        anchor = anchor_of(lines, idx)\n"
+     "        code = strip_code(lines[idx - 1])",
+     "template_literal or private_field"),
 ]
 
 

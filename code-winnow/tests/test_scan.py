@@ -2687,3 +2687,92 @@ def test_css_id_selector_is_not_read_as_a_comment(tmp_path):
     in Python and false in CSS. Reusing it here silenced every #id rule."""
     write(tmp_path, "a.css", "#hero {\n  transition: all 0.3s;\n}\n")
     assert "css-transition-all" in rules(str(tmp_path), "--paths", "a.css")
+
+
+# --------------------------------------------------------------------------
+# check_js lexing
+#
+# `strip_code` is a Python/C#/C++ lexer and check_js used it directly. It does
+# not know backticks delimit a string, and it reads JS's private-name `#` as a
+# comment marker - so the pass produced findings against strings and dropped
+# findings on any line holding a private field. Both directions below.
+# --------------------------------------------------------------------------
+
+def test_js_debugger_is_quiet_inside_a_template_literal(tmp_path):
+    """A backtick is a string delimiter in JS and not in any language
+    `strip_code` was written for, so example code in a template literal was a
+    P1 deletion candidate against a string."""
+    write(tmp_path, "a.js", "const sample = `function f() { debugger; }`;\n")
+    assert "js-debugger" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_test_only_is_quiet_inside_a_template_literal(tmp_path):
+    write(tmp_path, "a.js", "const doc = `describe.only('x', () => {})`;\n")
+    assert "js-test-only" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_template_literal_does_not_latch_past_its_close(tmp_path):
+    """The blanking is stateful across lines, so the bug that matters is the
+    inverse of the CSS latch: everything after a closed template going quiet."""
+    write(tmp_path, "a.js", "const s = `text`;\ndebugger;\n")
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_multiline_template_literal_stays_quiet_throughout(tmp_path):
+    write(tmp_path, "a.js",
+          "const doc = `\n  usage:\n  debugger;\n`;\nconst x = 1;\n")
+    assert "js-debugger" not in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_debugger_still_fires_beside_a_private_field(tmp_path):
+    """`#` is the private-name sigil in JS and a comment marker in Python, so
+    `strip_code` blanked the rest of the line and the pass's only P1 vanished
+    with no signal."""
+    write(tmp_path, "a.js", "class C { m() { this.#n++; debugger; } }\n")
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_console_still_fires_beside_a_private_field(tmp_path):
+    write(tmp_path, "a.js", "class C { m() { this.#n++; console.log(1); } }\n")
+    assert "js-console" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_rules_are_quiet_inside_a_block_comment(tmp_path):
+    write(tmp_path, "a.js", "/*\n  debugger;\n  console.log(1);\n*/\nconst x = 1;\n")
+    found = rules(str(tmp_path), "--paths", "a.js")
+    assert "js-debugger" not in found
+    assert "js-console" not in found
+
+
+def test_js_rules_still_fire_after_a_closed_block_comment(tmp_path):
+    write(tmp_path, "a.js", "/* note */\ndebugger;\n")
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_a_comment_marker_inside_a_string_does_not_blank_the_line(tmp_path):
+    """`const u = "https://x"; debugger;` - the `//` is inside a string, so
+    treating it as a comment drops a real P1."""
+    write(tmp_path, "a.js", 'const u = "https://x"; debugger;\n')
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "a.js")
+
+
+def test_js_an_apostrophe_in_jsx_text_does_not_blank_the_rest_of_the_file(tmp_path):
+    """Only a template literal survives a newline. Without the end-of-line
+    reset, `don't` in JSX text opens a string that never closes and every
+    line below it goes quiet - the same latch the CSS pass shipped once."""
+    write(tmp_path, "a.jsx",
+          "const El = () => <p>don't</p>;\ndebugger;\nconsole.log(1);\n")
+    found = rules(str(tmp_path), "--paths", "a.jsx")
+    assert "js-debugger" in found
+    assert "js-console" in found
+
+
+def test_js_an_apostrophe_in_jsx_text_does_not_blank_the_rest_of_the_file(tmp_path):
+    """Only a template literal survives a newline. Without the end-of-line
+    reset, `don't` in JSX text opens a string that never closes and every line
+    below it goes quiet - the same latch the CSS pass shipped once."""
+    write(tmp_path, "a.jsx",
+          "const El = () => <p>don't</p>;\ndebugger;\nconsole.log(1);\n")
+    found = rules(str(tmp_path), "--paths", "a.jsx")
+    assert "js-debugger" in found
+    assert "js-console" in found

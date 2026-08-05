@@ -2405,18 +2405,73 @@ def _css_uncommented(lines):
     return out
 
 
+def _js_uncommented(lines):
+    """`lines` with JavaScript strings and comments blanked, tracked across
+    line breaks.
+
+    `strip_code` cannot do this job and must not be widened to try: it is
+    shared with the C# and C++ checkers, where `#` opens a preprocessor
+    directive and a backtick means nothing. In JavaScript `#` is the
+    private-name sigil - `this.#count` - so treating it as a comment marker
+    blanked the rest of the line and dropped every rule on it, including the
+    only P1 this pass has. And a backtick opens a template literal that runs
+    to the next unescaped backtick, possibly several lines down, so example
+    code inside one was reported as live code.
+
+    Template literal contents are blanked whole, `${...}` interpolations
+    included. That is a deliberate false negative: an interpolation does hold
+    real code, but reading it needs brace tracking through nested templates,
+    and a missed finding is the safe direction for a pass whose findings
+    propose deletions.
+    """
+    out = []
+    state = None                      # None | sq | dq | tpl | block
+    for text in lines:
+        buf, i, n = [], 0, len(text)
+        while i < n:
+            ch = text[i]
+            if state is None:
+                if text.startswith("//", i):
+                    buf.append(" " * (n - i)); i = n
+                elif text.startswith("/*", i):
+                    state = "block"; buf.append("  "); i += 2
+                elif ch in "'\"`":
+                    state = {"'": "sq", '"': "dq", "`": "tpl"}[ch]
+                    buf.append(ch); i += 1
+                else:
+                    buf.append(ch); i += 1
+            elif state == "block":
+                if text.startswith("*/", i):
+                    state = None; buf.append("  "); i += 2
+                else:
+                    buf.append(" "); i += 1
+            else:
+                if ch == "\\" and i + 1 < n:
+                    buf.append("  "); i += 2
+                elif ((ch == "'" and state == "sq")
+                        or (ch == '"' and state == "dq")
+                        or (ch == "`" and state == "tpl")):
+                    state = None; buf.append(ch); i += 1
+                else:
+                    buf.append(" "); i += 1
+        # Only a template literal survives a newline. Dropping sq/dq state here
+        # is what stops an apostrophe in JSX text - `<p>don't</p>` - from
+        # blanking every line below it, which is the latch bug this scanner
+        # already shipped once in the CSS pass.
+        if state in ("sq", "dq"):
+            state = None
+        out.append("".join(buf))
+    return out
+
+
 def check_js(path, lines, findings):
     is_test = bool(TEST_HINT.search(path))
+    clean = _js_uncommented(lines)
     for idx in range(1, len(lines) + 1):
-        text = lines[idx - 1]
         anchor = anchor_of(lines, idx)
-        code = strip_code(text)
+        code = clean[idx - 1]
 
         if RE_JS_DEBUGGER.search(code):
-            # `code` and not `text`: strip_code blanks line comments and
-            # quoted strings. It is a Python/C#/C++ lexer, so it does NOT
-            # know template literals, and it reads JS's private-name `#` as
-            # a comment - both are open defects, not protections.
             # `is_test` demotes because a fixture is usually testing this.
             add(findings, path, idx, "P2" if is_test else "P1", "js-debugger",
                 "debugger statement - halts execution wherever devtools are "
