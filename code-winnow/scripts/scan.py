@@ -2382,25 +2382,45 @@ def _css_uncommented(lines):
     A `//` comment - legal in SCSS and LESS, not in CSS - is honoured only at
     the start of a line. Anywhere else it is far more often the `//` in a
     `url(https://…)`.
+
+    Quoted values are tracked for one reason only: a `/*` inside a string is
+    not a comment, and reading it as one opened a block that never closed and
+    silenced every rule below it for the rest of the file - no error, and the
+    file still counted as scanned. A string does not survive a line break in
+    CSS, so quote state resets at end of line and an apostrophe in a value
+    cannot latch the way the comment did.
     """
     out = []
     depth = 0
+    quote = None
     for text in lines:
-        if depth == 0 and text.lstrip().startswith("//"):
+        if depth == 0 and quote is None and text.lstrip().startswith("//"):
             out.append("")
             continue
         buf = []
         i = 0
         while i < len(text):
-            if depth == 0 and text.startswith("/*", i):
+            ch = text[i]
+            if quote is not None:
+                if ch == "\\" and i + 1 < len(text):
+                    buf.append(text[i:i + 2]); i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+                buf.append(ch); i += 1
+            elif depth == 0 and ch in "\"'":
+                quote = ch
+                buf.append(ch); i += 1
+            elif depth == 0 and text.startswith("/*", i):
                 depth, i = 1, i + 2
                 buf.append("  ")
             elif depth and text.startswith("*/", i):
                 depth, i = 0, i + 2
                 buf.append("  ")
             else:
-                buf.append(" " if depth else text[i])
+                buf.append(" " if depth else ch)
                 i += 1
+        quote = None
         out.append("".join(buf))
     return out
 

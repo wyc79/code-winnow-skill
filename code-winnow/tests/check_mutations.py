@@ -363,6 +363,15 @@ MUTATIONS = [
      "        anchor = anchor_of(lines, idx)\n"
      "        code = strip_code(lines[idx - 1])",
      "template_literal or private_field"),
+
+    # Without the quote tracking, a `/*` inside a CSS string opens a block that
+    # never closes and silences every rule below it for the rest of the file.
+    ("web-css-string-latch", SCAN,
+     '            elif depth == 0 and ch in "\\"\'":\n'
+     "                quote = ch\n"
+     "                buf.append(ch); i += 1\n",
+     "",
+     "comment_marker_inside_a_string_does_not_latch or single_quoted_comment_marker"),
 ]
 
 

@@ -2776,3 +2776,45 @@ def test_js_an_apostrophe_in_jsx_text_does_not_blank_the_rest_of_the_file(tmp_pa
     found = rules(str(tmp_path), "--paths", "a.jsx")
     assert "js-debugger" in found
     assert "js-console" in found
+
+
+# --------------------------------------------------------------------------
+# _css_uncommented latching
+#
+# `depth` had no string awareness, so a `/*` inside a quoted value opened a
+# comment that never closed and silenced every rule below it for the rest of
+# the file - with no error, and the file still counted as scanned.
+# --------------------------------------------------------------------------
+
+def test_css_a_comment_marker_inside_a_string_does_not_latch(tmp_path):
+    write(tmp_path, "a.css",
+          '.a { content: "/*"; }\n'
+          ".b { transition: all 0.2s; }\n"
+          ".c {\n  -webkit-border-radius: 4px;\n}\n")
+    found = rules(str(tmp_path), "--paths", "a.css")
+    assert "css-transition-all" in found
+    # css-dead-prefix is line-anchored where its siblings are not, so the
+    # declaration has to start its own line for this half of the assertion to
+    # mean anything. That asymmetry is the rule's, not this test's.
+    assert "css-dead-prefix" in found
+
+
+def test_css_a_single_quoted_comment_marker_does_not_latch(tmp_path):
+    write(tmp_path, "a.css",
+          ".a { content: '/*'; }\n.b { transition: all 0.2s; }\n")
+    assert "css-transition-all" in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_an_unterminated_comment_still_silences_what_follows_it(tmp_path):
+    """The latch is only wrong when the `/*` was never a comment. A genuinely
+    unterminated block comment does run to EOF, and CSS parsers agree."""
+    write(tmp_path, "a.css", "/* note\n.b { transition: all 0.2s; }\n")
+    assert "css-transition-all" not in rules(str(tmp_path), "--paths", "a.css")
+
+
+def test_css_a_string_does_not_hide_a_real_comment_after_it(tmp_path):
+    write(tmp_path, "a.css",
+          '.a { content: "x"; } /* .b { transition: all 1s; } */\n'
+          ".c { transition: all 0.2s; }\n")
+    found = rules(str(tmp_path), "--paths", "a.css")
+    assert found.get("css-transition-all") == [2], found
