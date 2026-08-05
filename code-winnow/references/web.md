@@ -2,7 +2,7 @@
 
 Read the section matching the file. A `.vue`, `.svelte`, `.astro` or `.html` file is usually all three at once, so read all three for those.
 
-**The scanner does not reach as far as your reading does.** Its JS and CSS rules run on `.vue`, `.svelte` and `.astro` only. A plain `.html` file gets the HTML rules and the universal pass and nothing else, so an inline `<script>` or `<style>` block in one is yours to judge and the scan will be silent on it either way.
+The scanner agrees: `.vue`, `.svelte`, `.astro`, `.html` and `.htm` all get the JavaScript, HTML and CSS rules, so an inline `<script>` or `<style>` block in a page is scanned like the file it behaves as. `.jsx` and `.tsx` are the exception — the scanner treats them as JavaScript only, so JSX markup gets these rules from your reading rather than from the scan.
 
 The web stack is where generated code is most fluent and therefore hardest to spot: it produces idiomatic-looking React, correct-looking ARIA and plausible-looking CSS, and every one of those three has a way of being wrong that reads as diligence. The traps sections matter more here than in any other language file, because the failures are overwhelmingly silent — a stripped `"use client"`, a deleted `import './styles.css'`, a reordered stylesheet. None of them fails a build.
 
@@ -113,7 +113,7 @@ Everything here applies to `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` and the 
 
 # HTML
 
-Applies to `.html`, `.htm`, and the template blocks of `.vue`/`.svelte`/`.astro`. JSX markup in `.jsx`/`.tsx` gets these rules from your reading only — those extensions are in the scanner's JS set, not its HTML set.
+Applies to `.html`, `.htm`, and the template blocks of `.vue`/`.svelte`/`.astro`. JSX markup in `.jsx`/`.tsx` gets these rules from your reading only — those two are in the scanner's JavaScript set and not its HTML set.
 
 ## Never touch
 

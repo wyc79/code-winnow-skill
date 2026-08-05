@@ -480,11 +480,21 @@ says "0 candidates" because it could not open the files looks identical to a cle
 
 ## The web tier
 
-**Why one `web.md` and not three files.** A `.vue`, `.svelte` or `.astro` file is JavaScript,
+**Why one `web.md` and not three files.** A `.vue`, `.svelte`, `.astro` or `.html` file is JavaScript,
 HTML and CSS at once, so a diff that touches one needs all three standards anyway. Three
 files would mean three reads for the common case and a dispatch rule to decide between
 them, to save nothing — every extra reference file is paid five times over on a parallel
 run, and this split would have added reads rather than removed them.
+
+**Why `.html` is in `MIXED_WEB_EXT` and not in an HTML-only set.** It was HTML-only at
+first, and a review showed what that produced: a page with an inline
+`<script>debugger;</script>` scanned to `findings=0, errors=[]` — a clean bill rather than
+a skip — while the same bytes in a `.vue` produced findings across all three languages.
+Membership is also what makes `check_css`'s `pure_css` gate withhold the empty-rule rule
+from these files, which it must, because `function noop() {}` in an inline script matches
+that pattern exactly. The widening came *after* the three passes had matching lexical
+awareness, deliberately: extending coverage onto a lexer that read template literals as
+code would have multiplied the defect rather than fixed it.
 
 **Why the three web extension sets overlap, and why the dispatch is `if` and not `elif`.**
 `MIXED_WEB_EXT` is in all three sets, and the three calls in `scan_file` are sequential

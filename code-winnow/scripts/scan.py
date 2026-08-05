@@ -35,13 +35,22 @@ CS_EXT = {".cs"}
 CPP_EXT = {".cpp", ".h", ".hpp", ".cc", ".inl"}
 PROSE_EXT = {".md", ".txt", ".rst", ".adoc"}
 
-# The web tier. `.vue`, `.svelte` and `.astro` are in all three sets because a
-# single-file component IS all three, and every web rule is anchored on syntax
-# that only occurs in its own language - so running the CSS pass over a
-# component file costs nothing and finds the `<style>` block.
-MIXED_WEB_EXT = {".vue", ".svelte", ".astro"}
+# The web tier. A `.vue`, `.svelte`, `.astro` or `.html` file IS all three
+# languages at once, so all four are in all three sets. Every web rule is
+# anchored on syntax that occurs in only one of the three, so running the CSS
+# pass over a page costs nothing and finds the `<style>` block.
+#
+# `.html` was in HTML_EXT alone until a review pointed out what that produced:
+# a page with an inline `<script>debugger;</script>` scanned to
+# `findings=0, errors=[]` - a clean bill rather than a skip - while the same
+# bytes in a `.vue` produced findings across all three languages.
+#
+# Membership here is also what makes `check_css`'s `pure_css` gate withhold the
+# empty-rule rule from these files, which it must: `function noop() {}` in an
+# inline script matches that pattern exactly.
+MIXED_WEB_EXT = {".vue", ".svelte", ".astro", ".html", ".htm"}
 JS_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"} | MIXED_WEB_EXT
-HTML_EXT = {".html", ".htm"} | MIXED_WEB_EXT
+HTML_EXT = MIXED_WEB_EXT
 CSS_EXT = {".css", ".scss", ".sass", ".less"} | MIXED_WEB_EXT
 
 TEST_HINT = re.compile(

@@ -2863,3 +2863,54 @@ def test_html_a_conditional_comment_does_not_hide_live_markup_after_it(tmp_path)
           "<!--[if lt IE 9]><script src=\"shim.js\"></script><![endif]-->\n"
           '<button role="button">Go</button>\n')
     assert "html-redundant-role" in rules(str(tmp_path), "--paths", "a.html")
+
+
+# --------------------------------------------------------------------------
+# .html gets the whole web pass
+#
+# .html and .htm were in HTML_EXT only, so a page with an inline <script> or
+# <style> scanned to findings=0, errors=[] - a clean bill rather than a skip,
+# and byte-identical content in a .vue produced findings across all three.
+# --------------------------------------------------------------------------
+
+WEB_PAGE = (
+    "<!doctype html>\n<html><head><style>\n"
+    ".b { transition: all 0.2s; }\n"
+    "</style></head>\n<body><button role=\"button\">Go</button>\n"
+    "<script>\n  debugger;\n  console.log('hi');\n</script>\n</body></html>\n"
+)
+
+
+def test_html_file_gets_the_js_and_css_rules_too(tmp_path):
+    write(tmp_path, "page.html", WEB_PAGE)
+    found = rules(str(tmp_path), "--paths", "page.html")
+    assert "js-debugger" in found
+    assert "js-console" in found
+    assert "css-transition-all" in found
+    assert "html-redundant-role" in found
+
+
+def test_a_page_scans_the_same_whether_it_is_html_or_vue(tmp_path):
+    """The defect this fixes: identical bytes, different verdicts by extension."""
+    write(tmp_path, "page.html", WEB_PAGE)
+    write(tmp_path, "page.vue", WEB_PAGE)
+    assert (sorted(rules(str(tmp_path), "--paths", "page.html"))
+            == sorted(rules(str(tmp_path), "--paths", "page.vue")))
+
+
+def test_htm_gets_the_whole_pass_as_well(tmp_path):
+    write(tmp_path, "page.htm", WEB_PAGE)
+    assert "js-debugger" in rules(str(tmp_path), "--paths", "page.htm")
+
+
+def test_the_empty_rule_check_stays_out_of_an_html_inline_script(tmp_path):
+    """`.html` joining MIXED_WEB_EXT is what makes `pure_css` withhold the
+    empty-rule rule from it - `function noop() {}` matches that pattern."""
+    write(tmp_path, "page.html",
+          "<script>\nfunction noop() {}\nconst o = { methods: {} };\n</script>\n")
+    assert "css-empty-rule" not in rules(str(tmp_path), "--paths", "page.html")
+
+
+def test_a_real_stylesheet_still_gets_the_empty_rule_check(tmp_path):
+    write(tmp_path, "a.css", ".dead { }\n")
+    assert "css-empty-rule" in rules(str(tmp_path), "--paths", "a.css")
