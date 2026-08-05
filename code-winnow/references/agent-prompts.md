@@ -210,7 +210,9 @@ Comments and docstrings, and only those. Runs always.
 > comments, Rust `///`, YARD, Swift markup. The bloat is identical across all of them;
 > only the syntax changes.
 > **Python, C#, C++, JavaScript/TypeScript, HTML and CSS are the languages this skill
-> claims.** In any other, propose a rewrite only if you can name the convention and the
+> claims** — but the docstring tables in `docstrings.md` were verified for the full tier
+> only, so a JSDoc or TSDoc rewrite still needs the named convention and the tool that
+> enforces it, exactly as that file says. In any other, propose a rewrite only if you can name the convention and the
 > tool that enforces it, or confirm nothing does; otherwise report the count and the
 > pattern and let the user decide. This is not timidity — Go *requires* the restatement,
 > Rust `///` can compile as a test, C# and Java tags can be build inputs, and none of that
@@ -260,7 +262,7 @@ version or dependency requirements. Otherwise skip it and say so in one line in 
 report. There is no reason to pay for a third agent on a diff that renames a local.
 
 > Your question is whether the documentation is **true**, not whether it is well written.
-> Three directions:
+> Four directions:
 > **(1) The change falsified a doc.** The diff altered behaviour that a documentation
 > file describes, and the doc was not updated. Find the docs that describe the changed
 > code — that search is a verification lookup, uncapped, and produces no finding of its

@@ -292,14 +292,15 @@ MUTATIONS = [
      'AWS_KEY = "AKIA' + 'IOSFODNN7EXAMPLQ"',
      "no_fixture_in_this_file"),
 
-    # The three web rules below are all the same shape of mistake: the obvious
+    # The next three rows are all the same shape of mistake: the obvious
     # pattern is one token wider than the rule, and the extra width is live
     # code. Each row widens it back and requires the quiet-side test to catch
     # it, because a narrowing with no test is a narrowing the next reader
     # simplifies away.
 
-    # `\bdebugger\b` reads like the whole rule and flags `debuggerEnabled` and
-    # `this.debugger.attach()` at P1.
+    # `\bdebugger\b` reads like the whole rule and flags `this.debugger.attach()`
+    # at P1. That one form is what this row rests on: `debuggerEnabled` in the
+    # same fixture matches neither pattern, so it guards nothing here.
     ("js-debugger-anchoring", SCAN,
      r'RE_JS_DEBUGGER = re.compile(r"(?:^|[;{])\s*debugger\s*(?=[;}]|\s*$)")',
      r'RE_JS_DEBUGGER = re.compile(r"\bdebugger\b")',

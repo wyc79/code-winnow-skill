@@ -2295,15 +2295,13 @@ def interpolation_holes(text):
 # so; a quiet scan over a .ts diff is not coverage of those.
 # --------------------------------------------------------------------------
 
-# The statement, not the word. `debugger` is a common identifier fragment
-# (`debuggerEnabled`, `this.debugger.attach()`, `isDebuggerAttached`), so a
-# `\bdebugger\b` rule hands live code to a deleter at P1. This anchors on both
-# sides instead: a statement position in front (start of line, `;` or `{`) and
-# a statement terminator behind. That keeps `{ mounted() { debugger; } }` -
-# how it actually appears in a single-file component - while `.debugger` and
-# `debuggerEnabled` match neither side. `if (x) debugger;` is a deliberate
-# miss: the widening that caught it would also catch `foo(debugger)`, which
-# cannot occur, and every property access, which does.
+# The statement, not the word. A `\bdebugger\b` rule hands `this.debugger.attach()`
+# to a deleter at P1. So this anchors on both sides: a statement position in front
+# (start of line, `;` or `{`) and a statement terminator behind. That keeps
+# `{ mounted() { debugger; } }` - how it appears in a single-file component - while
+# `.debugger` and `debuggerEnabled` match neither side. `if (x) debugger;` is a
+# deliberate miss: the widening that caught it would also catch every property
+# access.
 RE_JS_DEBUGGER = re.compile(r"(?:^|[;{])\s*debugger\s*(?=[;}]|\s*$)")
 
 # `.only` disables every other test in the file, silently, with a green run
@@ -2415,11 +2413,11 @@ def check_js(path, lines, findings):
         code = strip_code(text)
 
         if RE_JS_DEBUGGER.search(code):
-            # `code` and not `text`: strip_code blanks strings and line
-            # comments, so a commented-out `// debugger;` and the string
-            # "debugger" in a lint fixture both stop being findings.
-            # A shipped `debugger` halts the page for anyone with devtools
-            # open. In a fixture it is usually the thing under test.
+            # `code` and not `text`: strip_code blanks line comments and
+            # quoted strings. It is a Python/C#/C++ lexer, so it does NOT
+            # know template literals, and it reads JS's private-name `#` as
+            # a comment - both are open defects, not protections.
+            # `is_test` demotes because a fixture is usually testing this.
             add(findings, path, idx, "P2" if is_test else "P1", "js-debugger",
                 "debugger statement - halts execution wherever devtools are "
                 "open", anchor)
@@ -2449,8 +2447,9 @@ def check_html(path, lines, findings):
         for pattern, element in HTML_REDUNDANT_ROLE:
             if pattern.search(text):
                 add(findings, path, idx, "P3", "html-redundant-role",
-                    f"role restates what <{element}> already means - native "
-                    "semantics need no ARIA", anchor)
+                    f"role may restate what <{element}> already means - confirm, "
+                    "header/footer/li/form map to their role only in the right "
+                    "container", anchor)
                 break
 
         if RE_HTML_OBSOLETE.search(text):

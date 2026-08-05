@@ -2485,8 +2485,10 @@ def test_js_debugger_fires_on_the_statement(tmp_path):
 
 
 def test_js_debugger_is_quiet_on_an_identifier_containing_the_word(tmp_path):
-    """`\bdebugger\b` matched `debuggerEnabled` and `this.debugger.attach()`,
-    which is live code the rule would have handed to a deleter at P1."""
+    r"""`\bdebugger\b` matched `this.debugger.attach()`, which is live code the
+    rule would have handed to a deleter at P1. `debuggerEnabled` is in the
+    fixture as the other near-miss: it matches neither pattern, because there is
+    no word boundary between `r` and `E`."""
     write(tmp_path, "a.js",
           "const debuggerEnabled = true;\nthis.debugger.attach();\n")
     assert "js-debugger" not in rules(str(tmp_path), "--paths", "a.js")
@@ -2509,8 +2511,9 @@ def test_js_test_only_fires_on_the_jasmine_spelling(tmp_path):
 
 
 def test_js_test_only_is_quiet_when_only_is_a_word_in_the_name(tmp_path):
-    """The test name is a string, and strip_code blanks strings before this
-    rule reads the line - otherwise every test titled "only ..." was P1."""
+    """A test merely titled "only ..." is not a focused test. What keeps it
+    quiet is the pattern requiring the `.only(` call form, which this line does
+    not have - not string blanking, which never gets a chance to matter here."""
     write(tmp_path, "a.test.js", "it('only runs once', () => {});\n")
     assert "js-test-only" not in rules(str(tmp_path), "--paths", "a.test.js")
 
@@ -2663,7 +2666,7 @@ def test_css_empty_rule_is_quiet_in_a_single_file_component(tmp_path):
 
 
 def test_css_rules_are_quiet_inside_a_block_comment(tmp_path):
-    """Commented-out CSS is not a finding, and the span crosses lines."""
+    """The span crosses lines, which is the part a per-line guard would miss."""
     write(tmp_path, "a.css",
           "/*\n.old {\n  -webkit-border-radius: 4px;\n"
           "  transition: all 0.2s;\n}\n*/\n.b { color: red; }\n")

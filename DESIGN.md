@@ -510,14 +510,17 @@ report reads as though it had.
 row, because in all three cases the obvious pattern is one token wider than the rule and
 the extra width is live code:
 
-- `\bdebugger\b` flags `debuggerEnabled` and `this.debugger.attach()` at P1. The shipped
-  rule anchors on a statement position in front and a terminator behind.
+- `\bdebugger\b` flags `this.debugger.attach()` at P1. The shipped rule anchors on a
+  statement position in front and a terminator behind. Note that the mutation row rests on
+  that one form alone: `debuggerEnabled` is in the same fixture as the other near-miss, and
+  it matches neither pattern, because there is no word boundary between `r` and `E`.
 - Matching `role="button"` without the element flags `<div role="button">`, which is ARIA
   doing its job and the only thing naming that element to a screen reader.
 - A "`-webkit-` is legacy" sweep flags `-webkit-line-clamp`, `-webkit-overflow-scrolling`,
   `-webkit-appearance`, `-webkit-text-size-adjust`, `-webkit-box-orient` and
-  `-moz-osx-font-smoothing`, none of which have a working unprefixed form. The rule is a
-  named list of settled properties, and it has to stay one.
+  `-moz-osx-font-smoothing`, none of which are safely replaceable by their unprefixed form
+  across the browsers this rule has to stay quiet on. The rule is a named list of settled
+  properties, and it has to stay one.
 
 **Why `console.error` and `console.warn` are absent from `js-console`.** Those are how a
 library reports a real problem. A rule that fires on them fires on correct code in every
