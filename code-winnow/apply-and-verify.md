@@ -97,7 +97,7 @@ A fix applied to the wrong line is the worst outcome available in this whole ski
 
 ## Step 6 — Verify
 
-**Three parts, in this order: the deletion-safety pass, then the test comparison, then the re-scan and reconciliation.** The safety pass is written last in this file because it needs the vocabulary the other two establish, but it is the one to run first — it is the only check in the whole run that looks at what is *gone*, and the two below it can only see what is there.
+**Four parts, in this order: the deletion-safety pass, the test comparison, the re-scan and reconciliation, then what the cleanup itself introduced.** The first is written last in this file because it needs the vocabulary the others establish, but it is the one to run first — it is the only check in the whole run that looks at what is *gone*, and the rest can only see what is there. The fourth is written last and runs last, because it reads the scan the third one produces.
 
 **Re-run the whole suite** — the same command Step 5a recorded, and paste the actual output. See `superpowers:verification-before-completion`: no success claim without a command and its result.
 
@@ -142,7 +142,7 @@ DECLINED=""
 
 Read the **`resolved`** array, not the raw count. Your deletions moved every line below them, so comparing line numbers between the two runs is meaningless; the reconciliation is what tells you a finding actually cleared. Anything still listed as `persisting` did not.
 
-Then reconcile against the fix plan, which is the record of what was approved. Report three numbers plainly: **approved, applied, skipped** — with a reason for every skip, "anchor no longer present" included. An item that was approved and quietly not applied is the failure mode here, and it looks exactly like success.
+Then reconcile against the fix plan, which is the record of what was approved. Report four numbers plainly: **approved, applied, skipped, introduced** — with a reason for every skip, "anchor no longer present" included. An item that was approved and quietly not applied is the failure mode here, and it looks exactly like success. `introduced` comes from the fourth part below, and it is reported even when it is zero.
 
 Once verification passes, the backup from Step 5a has done its job. Say where it is and leave it — deleting it is the user's call, and `.code-winnow/` is already excluded from git.
 
@@ -178,5 +178,28 @@ Walk each deleted line and ask:
 
 Anything you cannot clear: restore **just that file** from the Step 5a backup — `cp -a "$BACKUP/<path>" "<path>"`, not the whole tree, which would revert every approved fix — say why in the report, and leave it. **Restoring one line you were unsure about costs nothing. Shipping one silent runtime break costs the user their trust in the whole tool**, and they will not know which of your deletions did it.
 
-Only once this pass is clean, hand off to `superpowers:requesting-code-review` for a cold read of the applied diff, and offer a simplification skill if a path is still hard to follow after the deletions. That pass is additive: it reviews the code that is there now, this one reviews what is gone.
+### What the cleanup itself introduced — the last check
+
+**This is the skill run on its own output**, and the post-fix scan has already answered it: every live finding in `$ROUND/scan-postfix.json` carries `status`, and **`new` means the finding did not exist before your edits**. Read them. No second scan — the array is on disk from the reconciliation above.
+
+**A `new` finding is never line churn.** The reconciliation key is `(path, rule, message, normalised anchor)` and carries no line number, so shifting every line below a deletion cannot manufacture one. It became `new` because the fix pass *wrote a line that trips a rule nothing tripped before* — the exact thing this skill exists to remove, arriving from the pass that was removing it.
+
+Sort each one into one of two buckets, and every item lands in one. **Decide the bucket by comparing against the Step 5a backup, never from memory** — `diff "$BACKUP/<path>" "<path>"` shows exactly which lines this pass wrote, and a file absent from `$BACKUP` is one the plan never named and Step 5b forbade you to touch:
+
+| Test against `$BACKUP` | Bucket |
+|---|---|
+| The finding's line **differs from the backup**, or its file is in `$BACKUP` and the line is new there | **Yours, now.** Fix it in this pass, under the same rules as any other edit — it is inside the approved scope because you put it there. Never bank it for the next run: that ships the chaff and bills the user a second review for it |
+| The finding's line **is byte-identical to the backup**, or its file is not in `$BACKUP` at all | **The tree moved under you** — a parallel edit, a format-on-save, a generated file. **Report it, do not fix it.** It is outside the plan, and the plan is the whole permission |
+
+**The comparison is the whole point of doing it this way.** You are the agent that made these edits, so you are the last one who should be deciding from recollection whether a finding is your doing — the second bucket is the one that costs you nothing to choose, and nothing in the output would show the choice was wrong. The backup removes the judgment: it is on disk, it predates the first edit, and it answers the question without an opinion.
+
+**Report the count either way, including zero**, as the `introduced` number above. "0 introduced" on a run that rewrote forty lines is a fact about the run; an omitted count reads as though nobody looked — and this is the one check whose absence is invisible, because a run that introduced chaff and never looked reports exactly like a clean one.
+
+**Fixing a `new` finding cannot open a new round.** Repair it, re-run the suite, and re-read the scan. If a repair introduces another `new` finding, stop after the second attempt and report both rather than looping — at that point the fix is a design change, which Step 5b does not authorise.
+
+**The scanner half is free but partial**, and the rest genuinely needs a reader who did not make the edits. A rule catches a dead local; nothing catches an abstraction the fix invented with one caller, a comment restating the rewrite, or a helper extracted for a single use. Judging that in this session is self-review by the agent with the most reason to defend it.
+
+**So only once this pass and the deletion-safety pass are clean, hand off to `superpowers:requesting-code-review` for a cold read of the applied diff — and put the question in the prompt.** A generic review asks whether the code is good; this one has to ask *whether the cleanup added anything*. Give it the diff, the fix plan, and one instruction: **"this diff is the output of a chaff-removal pass — flag anything it introduced that is itself chaff."** Without that line it reviews the file on its merits and never asks the only question this handoff exists for. Offer a simplification skill too if a path is still hard to follow after the deletions.
+
+Three checks, three different questions, and none substitutes for another: this one reads what the fix **added**, deletion-safety reads what it **removed**, and the cold review reads what is **there now**, with fresh eyes.
 

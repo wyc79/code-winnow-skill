@@ -3,10 +3,45 @@
 Every artifact `SKILL.md` Steps 4, 4b and 5 write. The rules governing *what goes in*
 them are in SKILL.md; this file is the shapes.
 
+## Who the report is written for
+
+**A competent programmer who has never run this skill and did not write the code.** That
+is the whole standard, and it is the one thing about the report that is easy to get wrong
+without noticing — you finish a run holding the entire vocabulary of the skill, and every
+internal term reads as ordinary English from inside.
+
+**None of this skill's private nouns appear above the audit block.** Not the agent letters
+(`A`, `B`, `C`, `D`, `E`, `S`), not `conflict check`, `X9`, `merged`, `upgraded`,
+`persisting`, `anchor`, `stem`, `worktree far side`, `prior_round`. They are precise and
+they are meaningless to the reader — a finding they cannot parse is a finding they skip,
+and the skimming this skill works hard to prevent arrives by the back door. Say the thing
+instead: "two agents reported the same line, counted once" rather than "1 merged".
+
+**The audit block may use them, because auditing is what it is for** — but it names each
+one where it appears, so a reader who drops into it is not stuck.
+
+**This applies to the fix plan's headlines too, and only its headlines.** The plan is the
+one artifact with both audiences: `backup.py` parses `Status:` and `file:` and nothing
+else, so the fields stay exactly as specified and are not written for anyone to enjoy —
+but the headline above them is what the user reads when deciding whether to approve the
+item, and an item they cannot parse is one they approve without reading or drop without
+knowing what they dropped. Nothing else in the workflow reads a headline, so there is no
+cost to making it plain.
+
+**Nothing downstream reads `report.md`.** Steps 5 and 6 run off `fixplan.md`, `scan.json`,
+`scan-postfix.json`, `meta.json` and `declined.json` — all machine-shaped and none of them
+governed by this section. The report is written for the person, and writing it for the
+person cannot slow the machine down.
+
 ## The condensed report — shown in chat
 
-`.code-winnow/round-NN/report.md` holds the full version. Omit any section that is
-empty rather than printing an empty heading.
+`.code-winnow/round-NN/report.md` holds the full version, in the same order. Omit any
+section that is empty rather than printing an empty heading.
+
+**The order is the point: the answer first, the evidence next, the audit last.** The
+reader's question is "what about my code" and the run's bookkeeping is not it. Opening
+with nine lines of scope, pass and conflict accounting spends their attention before they
+learn anything — and the P1 is below it.
 
 ```
 Round:     <NN>  —  .code-winnow/round-<NN>/
@@ -14,23 +49,19 @@ Compared:  <branch> @ <side>   vs   <base> @ <sha>   (<scope>)
 Generated: <YYYY-MM-DD HH:MM>
 
 ## Winnow report
-Scope: <diff source> — <current branch> vs <base / worktree / staged>
-Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
-Feature: <name> — <N> of <files> files          (omit when none was named)
-Passes: S scope, A chaff, B comments, C docs+headers, D performance, E silent-failure
-        (say which ran; if C or D was skipped, why; if S was self-drawn rather than
-        dispatched, say that too; and if any pass ran on a smaller model than the
-        supervisor, name it — a reader judging a thin result needs to know)
-Scope appeals: <n> — listed below, unresolved   (omit when none)
-Conflict check: <n> dismissed on comment evidence, <n> merged, <n> upgraded,
-        <n> deletions vetoed by E, <n> perf notes dropped
-Performance notes: <n> — round-NN/notes.md (not applied)
-        (or: "D skipped — no loops or hot-path entry points in this diff")
-Not fixable here: <n> P1/P2 findings reported but needing a design change   (omit when none)
-Previous run: <prior stem, or "none">
+
+<Two to four sentences, plain language. What was reviewed, in ordinary terms; how much
+was found and how serious the worst of it is; what you recommend doing. Someone who
+has never run this skill and has not read this code should finish this paragraph
+knowing whether they need to act, and roughly on what.>
+
+**Needs a decision from you:** <one line each, or omit the whole line when none.
+These are the only things that cannot wait: the header-convention question, an
+unresolved scope appeal, a credential to rotate, a finding nobody could verify.>
 
 ### P1 — Risk (behavior, security, test integrity)
-- `path/file.ext:LINE` — <what> → <why> → <proposed change>
+- `path/file.ext:LINE` — <what it breaks or costs, in ordinary terms> → <why the line
+  is like that> → <the change proposed>
 
 ### P2 — Maintainability
 ### P3 — Cosmetic
@@ -59,6 +90,31 @@ Previous run: <prior stem, or "none">
 
 ### Previously declined
 - <finding> — raised <date>, declined
+
+### How this run was made
+<Skippable if you trust the result; this is what to read if you do not. Every count
+below is reported even when it is zero — an omitted number reads as though the check
+was never made.>
+
+Scope: <diff source> — <current branch> vs <base / worktree / staged>
+Files: <files> in scope, <scanned_files> reviewed; added lines: <added_lines>
+Feature: <name> — <N> of <files> files          (omit when none was named)
+Reviews run: <name each pass in words, not letters — a code pass, a comments pass, a
+        docs-and-headers pass, a performance pass, a silent-failure pass, and the
+        scope pass when a feature was named. Say which ran; if the docs or
+        performance pass was skipped, why; if the scope boundary was drawn by the
+        orchestrator rather than a separate reviewer, say so plainly, because it is
+        the one decision a reader should distrust; and if any pass ran on a smaller
+        model, name it — a reader judging a thin result needs to know>
+Merging the reviews: <n> findings dismissed because a comment in the code explained
+        the line, <n> reported by two reviews and counted once, <n> made more serious
+        after a lookup, <n> proposed deletions overruled as load-bearing, <n>
+        performance notes dropped
+Scope appeals: <n> — listed above, unresolved   (omit when none)
+Performance notes: <n> — round-NN/notes.md (never applied)
+        (or: "performance pass skipped — no loops or hot-path entry points in this diff")
+Not fixable here: <n> P1/P2 findings reported but needing a design change   (omit when none)
+Previous run: <prior round, or "none">
 
 Full report: .code-winnow/round-NN/report.md — say the word to expand any item.
 Fix all, or tell me which.

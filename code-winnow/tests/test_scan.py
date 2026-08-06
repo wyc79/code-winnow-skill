@@ -666,6 +666,69 @@ def test_whole_files_baseline_does_not_resolve_untouched_findings(repo):
         + repr([(f["path"], f["line"], f["rule"]) for f in second["resolved"]]))
 
 
+def test_chaff_the_fix_pass_introduced_comes_back_marked_new(repo):
+    """Step 6's fourth part is a read of this stamp, so it has to be real.
+
+    The whole run is a bet that the cleanup does not add what it removes, and
+    nothing checked it: Step 6 read `resolved` and `persisting` and never
+    `new`, so a fix pass that repaired a swallowed exception and left a dead
+    local behind reported as a clean success. The signal was already being
+    computed by the reconciliation scan and thrown away.
+    """
+    write(repo, "a.py", "def load(cfg):\n    try:\n        return parse(cfg)\n"
+                        "    except Exception:\n        pass\n")
+    before = json.loads(run(str(repo), "--json").stdout)
+    assert "swallowed-exception" in {f["rule"] for f in before["findings"]}
+    (repo / "prior.json").write_text(json.dumps(before), encoding="utf-8")
+
+    # The fix pass repairs the finding and introduces one of its own.
+    write(repo, "a.py", "def load(cfg):\n    try:\n        return parse(cfg)\n"
+                        "    except ValueError as e:\n        raise Bad(cfg) from e\n"
+                        "\n\ndef helper(cfg):\n    unused = compute(cfg)\n"
+                        "    return cfg\n")
+    after = json.loads(run(str(repo), "--json",
+                          "--since", str(repo / "prior.json")).stdout)
+
+    assert "swallowed-exception" in {f["rule"] for f in after["resolved"]}
+    introduced = [f for f in after["findings"] if f.get("status") == "new"]
+    assert "dead-local" in {f["rule"] for f in introduced}, (
+        "the fix pass added a dead local and it is not stamped `new`; Step 6's "
+        "introduced count would read zero on a run that added chaff: "
+        + repr([(f["rule"], f.get("status")) for f in after["findings"]]))
+
+
+def test_a_finding_that_only_moved_is_not_reported_as_introduced(repo):
+    """The control, and the reason the `new` count is worth reporting at all.
+
+    Every deletion shifts the lines below it. If a line shift could produce a
+    `new` stamp, a normal run would report a page of phantom introductions and
+    the count would be ignored within one run - which is exactly how a real one
+    would then be missed. `finding_key` carries no line number for this reason.
+    """
+    # The removable function sits ABOVE the finding, so deleting it actually
+    # moves the reported line. Putting it below leaves the line number
+    # unchanged and the test passes without exercising anything.
+    write(repo, "a.py", "def drop():\n    return 3\n"
+                        "\n\ndef keep():\n    dead = 1\n    return 2\n")
+    before = json.loads(run(str(repo), "--json").stdout)
+    was = [f["line"] for f in before["findings"] if f["rule"] == "dead-local"]
+    (repo / "prior.json").write_text(json.dumps(before), encoding="utf-8")
+
+    write(repo, "a.py", "def keep():\n    dead = 1\n    return 2\n")
+    after = json.loads(run(str(repo), "--json",
+                           "--since", str(repo / "prior.json")).stdout)
+
+    moved = [f for f in after["findings"] if f["rule"] == "dead-local"]
+    assert moved, "the dead local is gone entirely; the fixture stopped testing this"
+    now = [f["line"] for f in moved]
+    assert was != now, (
+        f"the finding did not actually move ({was} -> {now}); this fixture "
+        f"cannot detect a line number leaking into the reconciliation key")
+    assert [f.get("status") for f in moved] == ["persisting"], (
+        "a line shift was reported as newly introduced: "
+        + repr([(f["line"], f.get("status")) for f in moved]))
+
+
 def test_a_genuinely_fixed_untouched_line_is_still_reported_resolved(repo):
     """The control for the test above, and the reason it is not just
     `resolved == []` everywhere. Holding preexisting findings back from the

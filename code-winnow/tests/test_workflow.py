@@ -759,6 +759,32 @@ def test_the_review_pipeline_hands_off_to_apply_and_verify():
         "review-pipeline.md never hands off - rungs 2 and 3 dead-end at Step 4b"
 
 
+def test_step6_reads_what_the_cleanup_introduced():
+    """The scanner stamps `new` on every finding the fix pass created, and for
+    a long time nothing read it: Step 6 reconciled `resolved` and `persisting`
+    and stopped there, so a run that removed chaff and added its own reported
+    as a clean success. `test_scan.py` pins the stamp; this pins the read.
+
+    Both entry paths reach this file, so the check cannot live in the review
+    pipeline - a cold apply is the run most likely to introduce something,
+    because it is executing a list without the review's context.
+    """
+    text = _doc(APPLY_MD)
+    step6 = text[text.index("## Step 6"):]
+
+    assert "`new`" in step6, (
+        "Step 6 never names the `new` status, so nothing tells the executor "
+        "the introduced-chaff signal exists")
+    assert "introduced" in step6.lower(), \
+        "Step 6 does not report an introduced count"
+
+    # The count is a required field of the reconciliation line, not a remark
+    # further down: an omitted number is what makes this check skippable.
+    assert re.search(r"approved, applied, skipped, introduced", step6), (
+        "the introduced count is not part of Step 6's required report line; "
+        "a count nobody is asked for is a count nobody produces")
+
+
 def test_the_binding_rules_are_stated_in_the_spine_only():
     """Both step files tell the reader the scope rules and `Never touch` are in
     SKILL.md and only there. A second copy makes that sentence false, and the
@@ -1091,6 +1117,55 @@ def test_no_reference_file_names_a_stem_shaped_artifact_path():
     assert not bad, (
         "stem-named artifact paths remain; the layout is round-NN/<short "
         "name>:\n  " + "\n  ".join(bad))
+
+
+def test_the_report_answers_before_it_audits():
+    """A real round-06 report opened with nine lines of scope, pass and
+    conflict accounting before one word about the code, in vocabulary only
+    this skill defines. It was complete, precise, and unreadable by the person
+    who asked for it - and the P1 was below the fold.
+
+    The counts are not the problem and are not being removed; their position
+    is. If the audit block climbs back above the findings, this fails.
+    """
+    text = _doc(REPORT_FORMAT)
+    assert "## Who the report is written for" in text, \
+        "the audience standard is gone; without it the report drifts back to a state dump"
+    assert "How this run was made" in text, \
+        "the audit block has no home, so its counts will be scattered back through the top"
+
+    tpl = text[text.index("## The condensed report"):]
+    audit = tpl.index("How this run was made")
+    for heading in ("### P1 —", "### Deliberately left alone"):
+        assert tpl.index(heading) < audit, (
+            f"{heading!r} sits below the audit block; the reader meets the run's "
+            f"bookkeeping before their own code")
+
+    # The zero-reporting gate must survive the move, or this trades one silent
+    # failure for another.
+    assert "even when it is zero" in text, \
+        "the report-every-count gate was lost while relocating the audit block"
+
+
+def test_the_skills_private_vocabulary_is_kept_out_of_the_readers_half():
+    """The terms are precise and they are meaningless to a reader who has not
+    run this skill. Naming them explicitly is what makes the rule checkable -
+    'write clearly' is not.
+
+    The list lives in `report-format.md` and only there: that is the file open
+    in front of whoever is writing the artifact, and a second copy in the step
+    is the one that goes stale. The step states the standard and points here.
+    """
+    assert "private nouns" in _doc(REPORT_FORMAT), \
+        "report-format.md no longer names the jargon it is banning from the report"
+
+    step4 = _doc(REVIEW_MD)
+    step4 = step4[step4.index("## Step 4 — Report"):]
+    assert "never run this skill" in step4, \
+        "Step 4 dropped the audience standard entirely"
+    assert "private nouns" not in step4, (
+        "the banned-word list is duplicated into Step 4; report-format.md owns "
+        "it, and the copy is what drifts")
 
 
 def test_report_format_requires_the_identity_block():

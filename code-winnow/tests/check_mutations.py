@@ -294,6 +294,33 @@ MUTATIONS = [
      "## The scope rules\n\n## Step 1 — Resolve the review scope",
      "binding_rules"),
 
+    # Step 6's fourth part rests on two properties of the reconciliation, and
+    # both fail silently. If `new` is not stamped, a run that added chaff
+    # reports zero introduced; if the key grows a line number, every deletion
+    # produces phantom introductions and the count gets ignored.
+    ("since-new-status", SCAN,
+     '        f["status"] = "persisting" if key in prior_keys else "new"',
+     '        f["status"] = "persisting"',
+     "marked_new"),
+
+    ("finding-key-line-independence", SCAN,
+     '    return (f["path"], f["rule"], f["message"], f.get("anchor", ""))',
+     '    return (f["path"], f["rule"], f["message"], f.get("anchor", ""), f.get("line"))',
+     "introduced or marked_new"),
+
+    # And the document has to actually read the stamp.
+    ("step6-introduced-count", APPLY,
+     "**approved, applied, skipped, introduced**",
+     "**approved, applied, skipped**",
+     "cleanup_introduced"),
+
+    # The report's order is a rule. Putting the run's bookkeeping back above
+    # the findings is the exact regression, and it reads as harmless.
+    ("report-audits-before-it-answers", REPORT_FORMAT,
+     "### P1 — Risk (behavior, security, test integrity)",
+     "### How this run was made\n\n### P1 — Risk (behavior, security, test integrity)",
+     "answers_before_it_audits"),
+
     # A backup path pasted out of the plan header instead of computed.
     ("step5a-backup-path-shape", BACKUP,
      '    if re.search(r"\\(|\\s{2,}", dest):',

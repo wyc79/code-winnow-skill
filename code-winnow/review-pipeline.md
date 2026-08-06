@@ -486,6 +486,8 @@ Never edit in this step.
 
 **Every shape this step writes is in `$WINNOW/references/report-format.md`** — the condensed report, the header-gate question, the fix plan, the performance notes document, `declined.json` and `perf-declined.md`. Read it before writing. What follows is what goes *in* them.
 
+**Write for a competent programmer who has never run this skill and did not write the code** — and note that by this point you are the worst-placed person to judge whether you have, because you are holding every term this document uses and from inside they all read as ordinary English. That is how a report ends up precise, complete and unreadable by the person who asked for it. `report-format.md` carries the standard operatively: the words that may not appear, and the order — **answer first, findings next, the run's bookkeeping last**. Every count is still reported, zeroes included; it just goes at the end.
+
 ### Naming and dating the report
 
 Write `$ROUND/report.md`. `$ROUND/scan.json` already exists from Step 2.

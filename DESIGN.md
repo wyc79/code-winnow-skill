@@ -488,6 +488,42 @@ once written that way, which had it backwards: installing the recommended review
 you *less* safety, silently. A cold reviewer reads the diff as it now stands and does not
 know which lines you removed.
 
+**Why the fourth part reads `new` rather than running its own scan.** `--since` already
+stamps every live finding `new` or `persisting` against the pre-fix baseline, so the answer
+to "what did the cleanup add" is computed by the reconciliation scan and was being thrown
+away — Step 6 read `resolved` and `persisting` and never `new`. The check costs one array
+read. A second scanner invocation would cost a full pass and produce the same array.
+
+**Why a `new` finding cannot be line churn.** `finding_key` is
+`(path, rule, message, anchor)` with the normalised source line as the anchor and no line
+number anywhere in it — that is exactly why it was written that way, because deletions move
+every line below them. So `new` cannot mean "the same finding, further up the file"; it
+means a `(path, rule, message, anchor)` combination that did not exist before the edits.
+Without that property the check would be unusable: every deletion would produce a page of
+phantom `new` entries and the count would be ignored within one run.
+
+**Why it is a scanner read and not a fourth judgment agent.** "Do not judge your own
+output" applies to judgment, so the answer was to take the judgment out rather than to add
+a reviewer. Detection is the scanner's stamp. Bucketing was the part that smuggled judgment
+back in — the first draft said "on a line this fix pass wrote", which asks the agent that
+made the edits to recall whether a finding is its own doing, with the exculpating bucket
+free to choose and nothing in the output revealing a wrong choice. Comparing against
+`$ROUND/pre-fix/` answers it from disk instead: the backup predates the first edit, so the
+bucket is a diff. What is left that is genuinely judgment — chaff no rule can see — goes to
+the cold reviewer that already runs, which is a fresh context by construction. A fourth
+agent would re-review the whole applied diff to find what one array lookup finds for free.
+
+**Why the cold-review handoff carries an explicit instruction.** It used to ask for "a cold
+read of the applied diff", and a reviewer given a diff reviews it on its merits — it has no
+way to know the diff is the *output of a cleanup pass*, so it never asks whether the
+cleanup added anything. The one question this handoff exists for was the one thing not in
+the prompt.
+
+**Why a repair loop stops after two attempts.** A `new` finding that survives its own repair
+is not chaff any more, it is a design problem in the fix — and Step 5b binds every edit to
+preserving behaviour. Looping would either exceed that bound or oscillate, and both are
+worse than reporting the pair and letting the user decide.
+
 ## The scanner
 
 **Why there is no entropy heuristic for secrets.** Hashes, UUIDs, base64 blobs and minified
