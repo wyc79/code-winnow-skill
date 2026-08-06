@@ -42,6 +42,15 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINNOW = os.path.dirname(HERE)
 SKILL_MD = os.path.join(WINNOW, "SKILL.md")
+REVIEW_MD = os.path.join(WINNOW, "review-pipeline.md")
+APPLY_MD = os.path.join(WINNOW, "apply-and-verify.md")
+
+# The workflow is three documents, not one: SKILL.md is the spine every entry
+# path reads, and the steps live in the two files it routes to. The harness has
+# to see all three or a block moved across the boundary stops being extracted -
+# and stops being executed - while every test still passes.
+SKILL_DOCS = (SKILL_MD, REVIEW_MD, APPLY_MD)
+
 REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
 BACKUP_PY = os.path.join(WINNOW, "scripts", "backup.py")
 
@@ -55,25 +64,31 @@ WINNOW_SUBS = {"<absolute path to this skill's directory>": WINNOW}
 # --------------------------------------------------------------------------
 
 def _bash_blocks():
-    """[(line_no, section_heading, body)] for every ```bash block."""
-    text = open(SKILL_MD, encoding="utf-8").read()
-    heads = {}
-    for i, line in enumerate(text.split("\n"), 1):
-        m = re.match(r"^#{2,4} (.+)$", line)
-        if m:
-            heads[i] = m.group(1)
+    """[(doc, line_no, section_heading, body)] for every ```bash block.
 
-    def section_of(ln):
-        best = ""
-        for h, name in heads.items():
-            if h < ln:
-                best = name
-        return best
-
+    `doc` is the basename, because a bare line number stopped identifying a
+    block once the workflow spanned three files.
+    """
     out = []
-    for m in re.finditer(r"```bash\n(.*?)```", text, re.S):
-        ln = text[: m.start()].count("\n") + 1
-        out.append((ln, section_of(ln), m.group(1)))
+    for path in SKILL_DOCS:
+        text = open(path, encoding="utf-8").read()
+        heads = {}
+        for i, line in enumerate(text.split("\n"), 1):
+            m = re.match(r"^#{1,4} (.+)$", line)
+            if m:
+                heads[i] = m.group(1)
+
+        def section_of(ln, heads=heads):
+            best = ""
+            for h, name in heads.items():
+                if h < ln:
+                    best = name
+            return best
+
+        doc = os.path.basename(path)
+        for m in re.finditer(r"```bash\n(.*?)```", text, re.S):
+            ln = text[: m.start()].count("\n") + 1
+            out.append((doc, ln, section_of(ln), m.group(1)))
     return out
 
 
@@ -92,11 +107,22 @@ SPINE = [
 ]
 
 
-def _find_block(marker):
-    hits = [b for b in _bash_blocks() if marker in b[2]]
-    assert hits, f"no ```bash block in SKILL.md contains {marker!r}"
-    assert len(hits) == 1, f"{marker!r} matches {len(hits)} blocks: {[h[0] for h in hits]}"
-    return hits[0]
+def _block(marker):
+    """The body of the one block containing `marker`, across all three docs.
+
+    Markers stay unique over the whole document set, not just within a file -
+    two blocks matching is a harness ambiguity whichever files they sit in, so
+    the uniqueness assertion spans SKILL_DOCS.
+
+    This returns the body rather than the tuple so that a call site missed when
+    the workflow was split across files raises NameError, instead of silently
+    indexing a character out of a string the way the old `[2]` would have.
+    """
+    hits = [b for b in _bash_blocks() if marker in b[3]]
+    assert hits, (f"no ```bash block in "
+                  f"{[os.path.basename(d) for d in SKILL_DOCS]} contains {marker!r}")
+    assert len(hits) == 1,         f"{marker!r} matches {len(hits)} blocks: {[(h[0], h[1]) for h in hits]}"
+    return hits[0][3]
 
 
 def bash_path():
@@ -163,12 +189,12 @@ def test_every_bash_block_is_run_or_explicitly_marked_illustrative():
     """A block that is neither exercised nor labelled is how an untested
     snippet enters the document. Adding one must break this test."""
     unaccounted = []
-    for ln, section, body in _bash_blocks():
+    for doc, ln, section, body in _bash_blocks():
         if any(m in body for _, m in SPINE):
             continue
         if re.search(r"^\s*#\s*(illustration|flag reference|pattern)", body, re.I | re.M):
             continue
-        unaccounted.append(f"SKILL.md:{ln} ({section}): {body.splitlines()[0][:60]}")
+        unaccounted.append(f"{doc}:{ln} ({section}): {body.splitlines()[0][:60]}")
     assert not unaccounted, (
         "bash blocks neither run by the harness nor marked illustrative:\n  "
         + "\n  ".join(unaccounted)
@@ -206,7 +232,7 @@ def repo(tmp_path):
 
 @requires_bash
 def test_step0_creates_and_excludes_the_workspace(repo):
-    _, _, body = _find_block("EXCLUSION FAILED")
+    body = _block("EXCLUSION FAILED")
     p = run_block(body, str(repo), WINNOW_SUBS)
     assert "workspace excluded" in p.stdout, p.stdout + p.stderr
     assert (repo / ".code-winnow").is_dir(), \
@@ -218,7 +244,7 @@ def test_step0_creates_and_excludes_the_workspace(repo):
 def test_step0_preserves_an_exclude_file_with_no_trailing_newline(repo):
     (repo / ".git" / "info").mkdir(parents=True, exist_ok=True)
     (repo / ".git" / "info" / "exclude").write_bytes(b"build/")   # no newline
-    _, _, body = _find_block("EXCLUSION FAILED")
+    body = _block("EXCLUSION FAILED")
     run_block(body, str(repo), WINNOW_SUBS)
     # No `build/` directory is created: check-ignore matches on pathname and
     # does not require the path to exist, so creating it changed nothing.
@@ -232,13 +258,13 @@ def test_step1_and_step2_run_in_separate_shells_and_produce_a_stem(repo):
     """The defect this exists for: Step 2 used $PY/$WINNOW/$SCOPE that Step 1
     set in a *different* tool call, so the run aborted and reported the repo
     clean. Running these in one shell hides it completely."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
 
-    p1 = run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
+    p1 = run_block(_block("# QUOTE IT"), str(repo), subs)
     assert p1.returncode == 0, f"Step 1 failed:\n{p1.stdout}\n{p1.stderr}"
 
-    p2 = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    p2 = run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
     assert "nothing to review" not in p2.stdout, (
         "Step 2 reported an empty scope on a repo with real changes - "
         "almost certainly $PY/$WINNOW did not survive from Step 1\n"
@@ -260,7 +286,7 @@ def test_step2_surfaces_a_refusal_instead_of_the_empty_scope_advice(repo):
     to get past a refusal, and the guard was recommending exactly that, at
     exit 0. The refusal has to reach the agent intact and the run has to stop.
     """
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW,
             'SCOPE=""': 'SCOPE="--scope staged"'}
     # Stage a file, then edit it again: the one case the scanner refuses.
@@ -269,7 +295,7 @@ def test_step2_surfaces_a_refusal_instead_of_the_empty_scope_advice(repo):
     (repo / "staged.py").write_text("def f():\n    d = 1\n# edited after\n",
                                     encoding="utf-8")
 
-    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    p = run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
     both = p.stdout + p.stderr
     assert "REFUSING:" in both, "the refusal was swallowed:\n" + both
     assert p.returncode != 0, "a refusal must stop the run, not exit 0"
@@ -286,10 +312,10 @@ def test_review_input_never_contains_an_untracked_binary(repo):
     change, so this is the default case, not an edge one. Excluded paths must
     still be NAMED - an omission the agent cannot see is the same silent-
     coverage failure the scanner's `errors` array exists to prevent."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    run_block(_block("# QUOTE IT"), str(repo), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
 
     art = repo / "Assets" / "Art"
     art.mkdir(parents=True)
@@ -298,7 +324,7 @@ def test_review_input_never_contains_an_untracked_binary(repo):
     (repo / "node_modules" / "dep.js").write_text("module.exports=1\n",
                                                   encoding="utf-8")
 
-    p = run_block(_find_block("Ask the scanner what it actually reviewed")[2],
+    p = run_block(_block("Ask the scanner what it actually reviewed"),
                   str(repo))
     assert p.returncode == 0, p.stdout + p.stderr
     raw = next((repo / ".code-winnow").glob(
@@ -329,7 +355,7 @@ def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path
     backup.py for `/fixplan.md`, which does not exist, and the refusal is
     "no fix plan" - a pass that proves nothing about the header at all.
     """
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     (repo / "src").mkdir(exist_ok=True)
     (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
     rd = repo / ".code-winnow" / "round-01"
@@ -340,7 +366,7 @@ def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path
         "- [ ] P1 thing\n      file:     src/a.py\n"
         "      anchor:   x = 1\n      evidence: rewrite, nothing removed\n",
         encoding="utf-8")
-    body = _find_block("scripts/backup.py")[2]
+    body = _block("scripts/backup.py")
     poisoned = ".code-winnow/round-01/pre-fix/  (NOT YET MADE)"
     # WINNOW too: the block invokes scripts/backup.py by path, and this test
     # deliberately runs without the env.sh that would otherwise supply it.
@@ -357,10 +383,10 @@ def test_step5a_refuses_a_backup_path_pasted_from_the_plan_header(repo, tmp_path
 
 @requires_bash
 def test_env_sh_actually_restores_state_in_a_fresh_shell(repo):
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    run_block(_block("# QUOTE IT"), str(repo), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
 
     probe = run_block(
         '. .code-winnow/env.sh\n'
@@ -377,10 +403,10 @@ def test_the_snapshot_function_survives_the_call_boundary(repo):
     """SNAPSHOT is compared in later blocks and by dispatched agents. If
     snapshot() is only defined in Step 2's block it is gone by then, and the
     check silently passes (both sides empty) or fires unconditionally."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    run_block(_block("# QUOTE IT"), str(repo), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
 
     same = run_block(
         '. .code-winnow/env.sh\n'
@@ -404,12 +430,12 @@ def test_review_input_is_never_empty_when_the_scanner_found_files(repo):
     """The builder ran `git diff HEAD`, which is empty when --scope auto falls
     back to the branch diff - so all three judgment agents got zero bytes and
     reported nothing while the scanner held a P1."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    run_block(_block("# QUOTE IT"), str(repo), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
 
-    p = run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(repo))
+    p = run_block(_block("Ask the scanner what it actually reviewed"), str(repo))
     assert p.returncode == 0, f"input builder refused:\n{p.stdout}{p.stderr}"
     diffs = list((repo / ".code-winnow").glob("round-*/input.diff"))
     assert diffs, "no input.diff written"
@@ -435,11 +461,11 @@ def test_review_input_on_a_clean_tree_branch_review(tmp_path):
     git("add", "-A")
     git("commit", "-qm", "work")
 
-    run_block(_find_block("EXCLUSION FAILED")[2], str(tmp_path), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(tmp_path), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(tmp_path), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(tmp_path), subs)
-    run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(tmp_path))
+    run_block(_block("# QUOTE IT"), str(tmp_path), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(tmp_path), subs)
+    run_block(_block("Ask the scanner what it actually reviewed"), str(tmp_path))
 
     diffs = list((tmp_path / ".code-winnow").glob("round-*/input.diff"))
     assert diffs and diffs[0].stat().st_size > 0, (
@@ -457,15 +483,15 @@ def test_step2_creates_a_round_folder_and_moves_nothing(repo):
     Creating it in Step 2 and not Step 0 is deliberate: cold entry at Step 5
     re-runs Step 0, and creating a round there would orphan the plan that
     session was invoked to execute."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
-    run_block(_find_block("# QUOTE IT")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
+    run_block(_block("# QUOTE IT"), str(repo), WINNOW_SUBS)
 
     ws = repo / ".code-winnow"
     (ws / "round-01").mkdir()
     (ws / "round-01" / "report.md").write_text("round one\n", encoding="utf-8")
     (ws / "declined.json").write_text('{"findings": []}\n', encoding="utf-8")
 
-    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo),
+    p = run_block(_block("rm -f .code-winnow/env.sh"), str(repo),
                   WINNOW_SUBS)
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
 
@@ -500,12 +526,12 @@ def test_step0_does_not_clobber_a_populated_index(repo):
     unconditional copy would overwrite the index with a blank skeleton, and
     `cp -n` is a GNU/BSD extension - a shell that ignores the flag clobbers
     and the run carries on."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     index = repo / ".code-winnow" / "README.md"
     assert index.is_file(), "Step 0 must lay down the root scaffold"
 
     index.write_text("# filled in by a previous run\n", encoding="utf-8")
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     assert index.read_text(encoding="utf-8") == "# filled in by a previous run\n"
 
 
@@ -540,15 +566,15 @@ def test_review_input_on_a_branch_review_includes_uncommitted_work(tmp_path):
         "\n\ndef UNCOMMITTED_MARKER():\n    unused_local = 1\n    return 2\n",
         encoding="utf-8")
 
-    run_block(_find_block("EXCLUSION FAILED")[2], str(tmp_path), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(tmp_path), WINNOW_SUBS)
     # An explicit branch scope is the case: `auto` on a dirty tree resolves to
     # worktree and never reaches the branch path, so the mismatch only appears
     # when the reviewer names the scope - which is what reviewing a branch means.
     subs = {"<absolute path to this skill's directory>": WINNOW,
             'SCOPE=""': 'SCOPE="--scope branch --base main"'}
-    run_block(_find_block("# QUOTE IT")[2], str(tmp_path), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(tmp_path), subs)
-    run_block(_find_block("Ask the scanner what it actually reviewed")[2], str(tmp_path))
+    run_block(_block("# QUOTE IT"), str(tmp_path), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(tmp_path), subs)
+    run_block(_block("Ask the scanner what it actually reviewed"), str(tmp_path))
 
     diffs = list((tmp_path / ".code-winnow").glob("round-*/input.diff"))
     assert diffs, "no input.diff written"
@@ -569,9 +595,9 @@ def _bootstrap(path):
     Every artifact path derives from the round now. The stem still
     identifies the run inside meta.json and the report headers; it just
     does not name files, so a test that needs a path asks for the round."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(path), WINNOW_SUBS)
-    run_block(_find_block("# QUOTE IT")[2], str(path), WINNOW_SUBS)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(path),
+    run_block(_block("EXCLUSION FAILED"), str(path), WINNOW_SUBS)
+    run_block(_block("# QUOTE IT"), str(path), WINNOW_SUBS)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(path),
               WINNOW_SUBS)
     got = run_block('. .code-winnow/env.sh; printf %s "$ROUND"', str(path))
     round_dir = got.stdout.strip()
@@ -611,7 +637,7 @@ def _write_plan(repo, round_dir, status_line):
 
 
 def _run_step5a(repo):
-    return run_block(_find_block("scripts/backup.py")[2], str(repo))
+    return run_block(_block("scripts/backup.py"), str(repo))
 
 
 @requires_bash
@@ -655,7 +681,7 @@ def test_every_reference_path_named_in_the_docs_exists():
     is the failure mode: the agent opens nothing, reports findings from no
     standard at all, and the run looks normal. Cheap to check, silent to miss.
     """
-    docs = [SKILL_MD, os.path.join(WINNOW, "references", "agent-prompts.md")]
+    docs = [*SKILL_DOCS, os.path.join(WINNOW, "references", "agent-prompts.md")]
     missing = []
     for doc in docs:
         text = open(doc, encoding="utf-8").read()
@@ -665,12 +691,96 @@ def test_every_reference_path_named_in_the_docs_exists():
     assert not missing, "documented paths that do not exist:\n  " + "\n  ".join(missing)
 
 
+# --------------------------------------------------------------------------
+# the split: SKILL.md routes, the two step files hold the steps
+# --------------------------------------------------------------------------
+
+def _doc(path):
+    return open(path, encoding="utf-8").read()
+
+
+def test_every_step_heading_lives_in_exactly_one_document():
+    """The split moved Steps 1-4b and 5-6 out of SKILL.md. A step that ended up
+    in both files drifts silently - two copies agree until one is edited - and a
+    step in neither is a gate nobody runs. Both are invisible at review time,
+    because each file reads as complete on its own."""
+    seen = {}
+    for path in SKILL_DOCS:
+        for m in re.finditer(r"(?m)^## (Step [\w.]+)\b", _doc(path)):
+            seen.setdefault(m.group(1), []).append(os.path.basename(path))
+
+    dupes = {s: w for s, w in seen.items() if len(w) > 1}
+    assert not dupes, f"steps defined in more than one document: {dupes}"
+
+    want = {"Step 0", "Step 1", "Step 2", "Step 3", "Step 3.5",
+            "Step 4", "Step 4b", "Step 5", "Step 6"}
+    assert want <= set(seen), f"steps present in no document: {sorted(want - set(seen))}"
+
+    assert seen["Step 0"] == ["SKILL.md"], (
+        "Step 0 must stay in SKILL.md - both entry paths run it, and the cold "
+        "path never opens either step file before it does")
+    for step in ("Step 1", "Step 2", "Step 3", "Step 3.5", "Step 4", "Step 4b"):
+        assert seen[step] == ["review-pipeline.md"], f"{step} is in {seen[step]}"
+    for step in ("Step 5", "Step 6"):
+        assert seen[step] == ["apply-and-verify.md"], f"{step} is in {seen[step]}"
+
+
+def test_skill_md_routes_to_both_step_files():
+    """SKILL.md is the only document either entry path is guaranteed to read.
+    If it stops naming a step file, that half of the workflow is unreachable -
+    and the run still looks normal, because the agent simply proceeds with the
+    steps it can see."""
+    text = _doc(SKILL_MD)
+    for name in ("review-pipeline.md", "apply-and-verify.md"):
+        assert name in text, f"SKILL.md never names {name} - it is unreachable"
+
+
+def test_the_cold_entry_path_points_at_apply_and_warns_off_the_review_pipeline():
+    """The cold path's whole value is not re-reading the review. It has to name
+    the file it *does* open, and refuse the one it does not - a bare "skip Steps
+    1 through 4b" is advice about sections that are no longer in front of the
+    reader, and the obvious next move is to go find them."""
+    text = _doc(SKILL_MD)
+    cold = text[text.index("## Entering at Step 5 cold"):]
+    assert "apply-and-verify.md" in cold, (
+        "the cold-entry section never names apply-and-verify.md, so it tells "
+        "the executor what to skip without saying what to read")
+    assert "review-pipeline.md" in cold, (
+        "the cold-entry section must name review-pipeline.md as the file NOT "
+        "to open - naming only the steps leaves the reader hunting for them")
+
+
+def test_the_review_pipeline_hands_off_to_apply_and_verify():
+    """Rungs 2 and 3 continue in the same session, so the review pipeline is the
+    only thing that can send them on. Without the handoff the run stops at the
+    fix plan with the edits unapplied and nothing saying why."""
+    text = _doc(REVIEW_MD)
+    assert "apply-and-verify.md" in text, \
+        "review-pipeline.md never hands off - rungs 2 and 3 dead-end at Step 4b"
+
+
+def test_the_binding_rules_are_stated_in_the_spine_only():
+    """Both step files tell the reader the scope rules and `Never touch` are in
+    SKILL.md and only there. A second copy makes that sentence false, and the
+    copy is what gets edited - so the rule the agents actually read goes stale
+    while the one under review stays correct."""
+    for heading in ("The scope rules", "Never touch"):
+        # Anchored to a heading line: the step files legitimately *mention*
+        # these by name in prose, and a substring match reads that as a copy.
+        pat = re.compile(r"(?m)^## " + re.escape(heading) + r"\s*$")
+        assert pat.search(_doc(SKILL_MD)), f"## {heading} left the spine"
+        for path in (REVIEW_MD, APPLY_MD):
+            assert not pat.search(_doc(path)), (
+                f"## {heading} is duplicated into {os.path.basename(path)}; "
+                f"both step files claim it is stated only in SKILL.md")
+
+
 def test_the_backup_script_exists_and_skill_md_invokes_it_by_path():
     """The Step 5a block is now an invocation, not an implementation. If the
     script is gone the block fails loudly; if the block stops naming it, the
     SPINE marker below stops matching and the harness tests nothing."""
     assert os.path.isfile(BACKUP_PY), "scripts/backup.py is missing"
-    _, _, body = _find_block("scripts/backup.py")
+    body = _block("scripts/backup.py")
     assert '"$WINNOW/scripts/backup.py"' in body, (
         "Step 5a must invoke the script through $WINNOW - a bare relative path "
         "only resolves when the cwd is the skill folder, which it never is")
@@ -769,10 +879,10 @@ def test_step5a_refuses_the_notes_document_on_its_status_line(repo):
 
 @requires_bash
 def test_baseline_json_exists_before_step_3_needs_it(repo):
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
     subs = {"<absolute path to this skill's directory>": WINNOW}
-    run_block(_find_block("# QUOTE IT")[2], str(repo), subs)
-    run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo), subs)
+    run_block(_block("# QUOTE IT"), str(repo), subs)
+    run_block(_block("rm -f .code-winnow/env.sh"), str(repo), subs)
 
     # Ask the shell, don't parse the file: %q quoting is not always single-quoted.
     got = run_block('. .code-winnow/env.sh; printf %s "$ROUND"', str(repo))
@@ -897,7 +1007,7 @@ def test_step4_reconciles_against_the_matching_prior_round(repo):
         "picked the more recent round rather than the matching one: "
         f"{meta['prior_round']}")
 
-    p = run_block(_find_block("PRIOR=$(")[2], str(repo))
+    p = run_block(_block("PRIOR=$("), str(repo))
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
     assert (ws / rd / "scan-vs-round-01.json").is_file(), \
         f"no reconciliation output written; block said:\n{p.stdout}{p.stderr}"
@@ -922,7 +1032,7 @@ def test_step4_index_substitutes_every_path_and_leaves_no_dead_link(repo):
                  "agent-B.md", "agent-D.md", "agent-E.md"):
         (ws / rd / name).write_text("x\n", encoding="utf-8")
 
-    p = run_block(_find_block('sed "s|{{ROUND}}|')[2], str(repo))
+    p = run_block(_block('sed "s|{{ROUND}}|'), str(repo))
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
 
     index = (ws / "README.md").read_text(encoding="utf-8")
@@ -962,15 +1072,25 @@ def test_report_format_points_at_the_templates_it_no_longer_holds():
 def test_no_reference_file_names_a_stem_shaped_artifact_path():
     """Every <stem>.md / <stem>.json path is now round-NN/<short name>. A
     pointer that survives the move but names the old shape sends an agent to a
-    path nothing writes, and the run looks normal."""
+    path nothing writes, and the run looks normal.
+
+    The workflow documents are checked too. Scoped to references/ alone, this
+    missed three `<stem>.json` pointers left in the steps themselves by the
+    round-folder migration - the documents an orchestrator actually executes.
+    """
     import glob
+    docs = glob.glob(os.path.join(WINNOW, "references", "*.md")) + list(SKILL_DOCS)
     bad = []
-    for p in glob.glob(os.path.join(WINNOW, "references", "*.md")):
+    for p in docs:
         for n, line in enumerate(open(p, encoding="utf-8"), 1):
-            if re.search(r"\.code-winnow/[^\s`)]*<stem>", line):
+            # Any `<stem>`-named artifact, with or without a `.code-winnow/`
+            # prefix. Anchoring on the prefix was the hole: the three stale
+            # pointers this caught were written bare, as `<stem>.json`.
+            if re.search(r"<stem>\s*\.(json|md|diff|txt|list)", line):
                 bad.append(f"{os.path.basename(p)}:{n}: {line.strip()[:90]}")
-    assert not bad, "stem-named paths still in the references:\n  " + \
-        "\n  ".join(bad)
+    assert not bad, (
+        "stem-named artifact paths remain; the layout is round-NN/<short "
+        "name>:\n  " + "\n  ".join(bad))
 
 
 def test_report_format_requires_the_identity_block():
@@ -994,8 +1114,8 @@ def test_step2_never_reuses_an_existing_round_number(repo):
     Stem-named files used to make a collision harmless, so this is a
     protection the fixed-short-names layout removed rather than a defect it
     inherited."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
-    run_block(_find_block("# QUOTE IT")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
+    run_block(_block("# QUOTE IT"), str(repo), WINNOW_SUBS)
 
     ws = repo / ".code-winnow"
     (ws / "round-01").mkdir()
@@ -1003,7 +1123,7 @@ def test_step2_never_reuses_an_existing_round_number(repo):
     plan = ws / "round-03" / "fixplan.md"
     plan.write_text("REAL PLAN, approved\n", encoding="utf-8")
 
-    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo),
+    p = run_block(_block("rm -f .code-winnow/env.sh"), str(repo),
                   WINNOW_SUBS)
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
 
@@ -1018,11 +1138,11 @@ def test_step2_round_number_survives_the_octal_trap(repo):
     """`$(( 08 + 1 ))` is an invalid-octal error in bash, so a zero-padded
     round number needs `10#`. Without it the ninth round of any repo aborts
     Step 2 with 'value too great for base'."""
-    run_block(_find_block("EXCLUSION FAILED")[2], str(repo), WINNOW_SUBS)
-    run_block(_find_block("# QUOTE IT")[2], str(repo), WINNOW_SUBS)
+    run_block(_block("EXCLUSION FAILED"), str(repo), WINNOW_SUBS)
+    run_block(_block("# QUOTE IT"), str(repo), WINNOW_SUBS)
     (repo / ".code-winnow" / "round-08").mkdir()
 
-    p = run_block(_find_block("rm -f .code-winnow/env.sh")[2], str(repo),
+    p = run_block(_block("rm -f .code-winnow/env.sh"), str(repo),
                   WINNOW_SUBS)
     assert p.returncode == 0, f"{p.stdout}{p.stderr}"
     assert (repo / ".code-winnow" / "round-09").is_dir(), \
@@ -1039,12 +1159,16 @@ def test_skill_md_carries_no_lone_carriage_return():
     excludes CR deliberately, and the harness only extracts ```bash blocks, so
     a prose line was never executed or scanned. Nothing else in the document
     should contain one either, which is why this checks the whole file."""
-    data = open(SKILL_MD, "rb").read()
-    lone = data.count(b"\x0d") - data.count(b"\x0d\x0a")
-    where = [i for i, line in enumerate(data.split(b"\n"), 1)
-             if b"\x0d" in line.rstrip(b"\x0d")]
-    assert lone == 0, (
-        f"{lone} lone carriage return(s) in SKILL.md, on line(s) {where}. "
+    bad = []
+    for path in SKILL_DOCS:
+        data = open(path, "rb").read()
+        lone = data.count(b"\x0d") - data.count(b"\x0d\x0a")
+        where = [i for i, line in enumerate(data.split(b"\n"), 1)
+                 if b"\x0d" in line.rstrip(b"\x0d")]
+        if lone:
+            bad.append(f"{os.path.basename(path)}: {lone} on line(s) {where}")
+    assert not bad, (
+        "lone carriage return(s):\n  " + "\n  ".join(bad) + "\n"
         "A backslash escape was interpreted somewhere it should have stayed "
         "literal - check any shell or Python one-liner that wrote this text.")
 
@@ -1064,7 +1188,7 @@ def test_step4_reconciliation_succeeds_when_there_is_no_prior_round(repo):
                       .read_text(encoding="utf-8"))
     assert meta["prior_round"] is None, "fixture no longer exercises no-prior"
 
-    p = run_block(_find_block("PRIOR=$(")[2], str(repo))
+    p = run_block(_block("PRIOR=$("), str(repo))
     assert p.returncode == 0, (
         f"the no-prior path must succeed:\n{p.stdout}{p.stderr}")
     assert "Previous run: none" in p.stdout or "no prior round" in p.stdout, \

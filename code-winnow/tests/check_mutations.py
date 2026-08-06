@@ -33,6 +33,8 @@ WINNOW = os.path.dirname(HERE)
 SCAN = os.path.join(WINNOW, "scripts", "scan.py")
 BACKUP = os.path.join(WINNOW, "scripts", "backup.py")
 SKILL = os.path.join(WINNOW, "SKILL.md")
+REVIEW = os.path.join(WINNOW, "review-pipeline.md")
+APPLY = os.path.join(WINNOW, "apply-and-verify.md")
 REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
 TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
 NOTES_TPL = os.path.join(WINNOW, "scaffold", "round", "notes.md")
@@ -40,11 +42,15 @@ NOTES_TPL = os.path.join(WINNOW, "scaffold", "round", "notes.md")
 
 # (name, target_file, find, replace_with, pytest -k expression that MUST fail)
 #
-# SKILL.md is a mutation target too. Its embedded scripts are executable
-# artifacts that test_workflow.py extracts and runs, so a guard written into
-# one of them can go vacuous exactly like a guard in scan.py can. The same
-# holds for the templates in references/report-format.md: the notes document's
-# shape is what stops an executor treating Agent D's hypotheses as a fix plan.
+# The workflow documents are mutation targets too. Their embedded scripts are
+# executable artifacts that test_workflow.py extracts and runs, so a guard
+# written into one of them can go vacuous exactly like a guard in scan.py can.
+# Steps 1-4b live in review-pipeline.md and Steps 5-6 in apply-and-verify.md,
+# so a mutation names the file the block is actually in - naming SKILL.md for a
+# block that moved would find nothing to replace and pass by doing nothing. The
+# same holds for the templates in references/report-format.md: the notes
+# document's shape is what stops an executor treating Agent D's hypotheses as a
+# fix plan.
 MUTATIONS = [
     ("directive-exemption", SCAN,
      "    if is_directive(text):\n        return None\n",
@@ -255,17 +261,38 @@ MUTATIONS = [
 
     # A refusal produces no stem, so the empty-scope guard fires on top of it
     # and its advice ("pass --base <ref>") is the retry Step 1 forbids.
-    ("step2-refusal-passthrough", SKILL,
+    ("step2-refusal-passthrough", REVIEW,
      """  if grep -q '^REFUSING:' "$ERRF"; then""",
      """  if false; then""",
      "refusal"),
 
     # Without the text test the builder cats untracked binaries into the file
     # five judgment agents are handed, and `-s` passes because it is large.
-    ("step3-binary-exclusion", SKILL,
+    ("step3-binary-exclusion", REVIEW,
      '      if ! LC_ALL=C grep -qI . "$f" 2>/dev/null; then',
      '      if false; then',
      "untracked_binary"),
+
+    # The workflow spans three documents, and the two ways that goes wrong are
+    # both silent: each file reads as complete on its own, so a step present in
+    # two of them, or in none, survives review. These three break the split in
+    # each direction and require the structural tests to notice.
+    ("split-step-in-two-documents", APPLY,
+     "## Step 6 — Verify",
+     "## Step 4 — Report\n\n## Step 6 — Verify",
+     "step_heading"),
+
+    ("split-step-in-no-document", REVIEW,
+     "## Step 3.5 — Conflict check",
+     "### Step 3.5 — Conflict check",
+     "step_heading"),
+
+    # The scope rules bind both step files and are stated only in SKILL.md.
+    # A second copy is the one that gets edited.
+    ("split-binding-rule-duplicated", REVIEW,
+     "## Step 1 — Resolve the review scope",
+     "## The scope rules\n\n## Step 1 — Resolve the review scope",
+     "binding_rules"),
 
     # A backup path pasted out of the plan header instead of computed.
     ("step5a-backup-path-shape", BACKUP,
@@ -394,7 +421,7 @@ def run(argv, cwd=None):
 # mirror while passing in the real tree, and the harness reports it as a red
 # baseline rather than as the missing copy it is.
 COPY_DIRS = ("scripts", "tests", "references", "scaffold")
-COPY_FILES = ("SKILL.md",)
+COPY_FILES = ("SKILL.md", "review-pipeline.md", "apply-and-verify.md")
 
 
 def mirror(dst):

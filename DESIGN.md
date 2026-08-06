@@ -1,12 +1,18 @@
 # Design notes
 
-Why the mechanical parts of `code-winnow/SKILL.md` are written the way they are. Every
-entry is a near-miss: a form that reads correctly, does something else, and fails
-silently. Agents executing the skill do not need this file. Maintainers editing the
-snippets do — each of these was a shipped defect, and the obvious simplification
-reintroduces it.
+Why the mechanical parts of the workflow are written the way they are. Every entry is a
+near-miss: a form that reads correctly, does something else, and fails silently. Agents
+executing the skill do not need this file. Maintainers editing the snippets do — each of
+these was a shipped defect, and the obvious simplification reintroduces it.
 
-`SKILL.md` keeps the rationale for rules an agent will argue itself out of under
+The workflow is three documents — `code-winnow/SKILL.md` (the spine and Step 0),
+`review-pipeline.md` (Steps 1 – 4b) and `apply-and-verify.md` (Steps 5 – 6) — split by
+entry path so that a run invoked to apply an approved plan does not read the review it
+is skipping. Where an entry below says "SKILL.md" about a step, the step now lives in
+whichever of the two files owns it; `test_workflow.py` asserts that mapping, so it
+cannot drift silently.
+
+Those documents keep the rationale for rules an agent will argue itself out of under
 pressure — scope discipline, "an unattended run never edits", the `evidence:` field,
 "do not judge your own output". Those arguments are load-bearing at execution time.
 Everything below is load-bearing only at edit time.
@@ -214,7 +220,7 @@ destructive one. That is a protection the layout change *removed*, not one it in
 repo. The bare `mkdir` is the backstop: it fails loudly if the number is ever wrong
 again. Found by running the skill on its own branch.
 
-**Why a test asserts SKILL.md contains no lone carriage return.** A `\r` written through
+**Why a test asserts the workflow documents contain no lone carriage return.** A `\r` written through
 a shell one-liner became a literal `0x0D` inside the PowerShell undo command, which
 rendered as `'.code-winnowound-02\pre-fix\*'` — the only Windows recovery route in the
 document, handed to the user immediately after their files were edited. It passed every
@@ -309,6 +315,29 @@ large. An omission an agent cannot see is the same silent-coverage failure the s
 JSON carries a `files` *count*, not a path list, and `findings[].path` only names files
 that produced a finding — so every clean file in scope silently vanishes from such a
 check.
+
+## Step 3.5 — conflict arbitration
+
+**Why the step exists at all.** The split that keeps the agents' outputs mergeable also
+blinds A to the thing that most often decides its verdicts: what the author said. A field
+with no reader is dead weight — unless the line above it says the serializer reads it.
+Without the merge the report contradicts itself, proposing a deletion on one page and
+quoting the comment defending it on another.
+
+**Why X9 is worth having when Step 6 asks the same five questions.** X9 asks them before
+the fix plan is written, so the bad deletion is never approved: the user never sees it
+offered, never says yes, and nothing has to be reverted. Step 6's deletion-safety pass
+asks them after the edits land, and its remedy is restoring a file from the backup.
+
+**Why both passes stay, and neither is redundant.** The fix plan is a *user-edited subset*
+of what E reviewed — the user deletes items, items go stale and get skipped, and a cold
+Step 5 session executes the plan without E's output in front of it. Step 6 checks what was
+actually removed, which is not knowable at Step 3.5.
+
+**Why E's veto runs one direction only.** E saving a line rests on E naming a mechanism
+that breaks. E condemning a line A did not flag rests on nothing but E's opinion, and E's
+own gate excludes style opinions — so it is an ordinary E finding, held to E's gate, not a
+veto and not a merge.
 
 ## Step 4 — reporting and reconciliation
 
@@ -422,6 +451,14 @@ edits there is no clean point to return to.
 
 **Why the test-name list matters more than the count.** Delete one test and merge two others
 into a parametrized pair and the total is unchanged while a real test is gone.
+
+**Why a cold session computes the backup path instead of reading it from the plan header.**
+The header is prose written for a human, and a value copied out of it arrives with whatever
+else is on that line. `Backup:` once carried a trailing `(NOT YET MADE)` marker, and the
+backup silently went to a directory of that name — so the restore point existed, under a
+name nothing would ever look for. `backup.py` now refuses a destination containing a
+parenthetical, but that is the backstop; the durable fix is that every path derives from
+`$ROUND`, the directory the plan itself sits in.
 
 ## Step 6 — verification
 

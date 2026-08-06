@@ -72,7 +72,12 @@ Test-chaff detection is broader, because the shapes are: pytest/unittest, NUnit/
 
 ```
 code-winnow/
-  SKILL.md                 # Agent instructions — the workflow and its rules
+  SKILL.md                 # The spine every run reads: scope rules, Never touch,
+                           #   Step 0, and the routing table to the two files below
+  review-pipeline.md       # Steps 1 – 4b — review, conflict check, report, fix plan.
+                           #   A run invoked to apply a plan never opens this file.
+  apply-and-verify.md      # Steps 5 – 6 — backup, edits, deletion-safety, reconcile.
+                           #   Both entry paths end here.
   scripts/scan.py          # Deterministic candidate scanner
   scripts/backup.py        # Step 5a: the restore point, and six refusals
   references/
@@ -120,12 +125,21 @@ There are no symlinks or aliases at the root, deliberately: `ln -s` on Git Bash 
 produces a *copy*, and a hard-linked `fixplan.md` re-points every rotation, so a resume
 line copied yesterday would apply today's plan. `DESIGN.md` has the measurements.
 
-`SKILL.md` is the workflow and nothing else. The prompts, templates and the backup
-script live beside it so an orchestrator that only needs to *dispatch* a prompt does not
-have to read it, and so the backup is a testable script rather than a heredoc an agent
-retypes. Every one of those files is still under test: `test_workflow.py` extracts and
-runs SKILL.md's shell blocks, and `check_mutations.py` mutates the script, the templates
-and the document alike.
+The workflow is the three documents at the top of that tree, and the split is by **entry
+path**, not by step. `SKILL.md` holds what binds every run — the scope rules, the
+unattended answers, `Never touch`, Step 0 — and routes to one of two files. A full review
+reads `review-pipeline.md` and then `apply-and-verify.md`; a run invoked as
+`code-winnow: apply <plan>.fixplan.md` reads `apply-and-verify.md` and never opens the
+review pipeline at all. That second path is the reason for the boundary: it already
+skips Steps 1 – 4b, and a single file made it read them first to be told to.
+
+The prompts, templates and the backup script live beside those three so an orchestrator
+that only needs to *dispatch* a prompt does not have to read it, and so the backup is a
+testable script rather than a heredoc an agent retypes. Every one of those files is
+still under test: `test_workflow.py` extracts and runs the shell blocks from all three
+documents, checks that each step is defined in exactly one of them, and checks that the
+routers still name the files they route to; `check_mutations.py` mutates the script, the
+templates and the documents alike.
 
 ## Scanner (standalone)
 
