@@ -91,6 +91,16 @@ the fix executor; other vendors ship an equivalent three-way split under their o
 A name that has aged out is worse than no guidance, since it fails at dispatch rather
 than at review.
 
+**This table is published as data as well as prose.** `$WINNOW/scripts/passes.py --json`
+emits every pass with its tier, its trigger condition, the reference files it names and a
+fully assembled prompt — for the dispatcher that can route passes across providers, which
+is where per-pass tiering earns the most and where five readings from one model family
+share the blind spots a panel exists to remove. It **mirrors** the rows above rather than
+restating them: `tests/test_passes.py` parses this table and fails when the two disagree,
+so a tier changes here and nowhere else. The prompts themselves are never copied — they
+resolve from markers in `agent-prompts.md`, and a marker that goes missing is a refusal
+naming the pass, never a shorter prompt.
+
 **Say what you did.** If any pass ran on a different tier from the supervisor, put one
 line in the report header — the same reason the report already says when C or D was
 skipped, or when S was self-drawn. A reader deciding how much to trust a thin Agent B

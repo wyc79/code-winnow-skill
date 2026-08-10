@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "source": "references/agent-prompts.md",
+  "tier_source": "references/portability.md",
+
+  "_comment": [
+    "The structural half of the judgment-pass contract. Prompt bodies live in",
+    "references/agent-prompts.md and nowhere else; this file holds only ids,",
+    "dispatch metadata, and locators. A `find` string is a locator, not a copy:",
+    "scripts/passes.py refuses to emit when it does not match exactly `count`",
+    "times, and tests/test_passes.py fails when one goes stale. A copied prompt",
+    "body would drift undetectably, which is why there are none here.",
+    "",
+    "`tier` mirrors the model-tier table in references/portability.md. It is",
+    "duplicated here so a dispatcher does not have to parse prose, and",
+    "tests/test_passes.py parses that table and fails if the two disagree."
+  ],
+
+  "shared_blocks": {
+    "writes": {
+      "source": "marker",
+      "slots": ["round_dir", "pass_id", "identity_block"]
+    },
+    "staleness": {
+      "source": "marker",
+      "slots": []
+    },
+    "scope-rule": {
+      "source": "marker",
+      "slots": [],
+      "requires": "feature"
+    },
+    "scope-list": {
+      "source": "input",
+      "from": "--scope-list",
+      "slots": [],
+      "requires": "feature"
+    },
+    "scope-hunks": {
+      "source": "marker",
+      "slots": [],
+      "requires": "feature"
+    }
+  },
+
+  "slots": {
+    "round_dir": {
+      "in": "shared:writes",
+      "find": "<the round directory>",
+      "count": 2,
+      "from": "--round"
+    },
+    "pass_id": {
+      "in": "shared:writes",
+      "find": "<X>",
+      "count": 1,
+      "from": "the pass id"
+    },
+    "identity_block": {
+      "in": "shared:writes",
+      "find": "Round:     <NN>  —  .code-winnow/round-<NN>/\nCompared:  <branch> @ <side>   vs   <base> @ <sha>   (<scope>)\nGenerated: <YYYY-MM-DD HH:MM>",
+      "count": 1,
+      "from": "--identity-block",
+      "why_not_derived": [
+        "meta.json carries no <side>, and no base at all under worktree scope,",
+        "so rendering this line means inventing report format - which",
+        "references/report-format.md owns and this contract does not touch. The",
+        "orchestrator already renders it for every markdown file the round",
+        "writes; it passes the same string here."
+      ]
+    },
+    "feature_phrase": {
+      "in": "prompt:S",
+      "find": "winnow the dash\ncooldown work",
+      "count": 1,
+      "from": "--feature",
+      "why": [
+        "Agent S's prompt carries a worked example. Extracted verbatim it",
+        "dispatches S against a feature nobody asked for, and S returns a",
+        "confident boundary for it - a scope drawn one file narrow leaves that",
+        "file reviewed by nobody, with nothing in the output to say so."
+      ]
+    }
+  },
+
+  "passes": [
+    {
+      "id": "S",
+      "step": 1,
+      "runs": "conditional",
+      "conditional_on": "feature",
+      "tier": "supervisor",
+      "shared": ["writes"],
+      "slots": ["feature_phrase"]
+    },
+    {
+      "id": "A",
+      "step": 3,
+      "runs": "always",
+      "tier": "mid",
+      "shared": ["writes", "staleness", "scope-rule", "scope-list", "scope-hunks"],
+      "slots": []
+    },
+    {
+      "id": "B",
+      "step": 3,
+      "runs": "always",
+      "tier": "mid",
+      "shared": ["writes", "staleness", "scope-rule", "scope-list", "scope-hunks"],
+      "slots": []
+    },
+    {
+      "id": "C",
+      "step": 3,
+      "runs": "conditional",
+      "conditional_on": "diff",
+      "tier": "mid",
+      "shared": ["writes", "staleness", "scope-rule", "scope-list", "scope-hunks"],
+      "slots": []
+    },
+    {
+      "id": "D",
+      "step": 3,
+      "runs": "conditional",
+      "conditional_on": "diff",
+      "tier": "mid",
+      "shared": ["writes", "staleness", "scope-rule", "scope-list", "scope-hunks"],
+      "slots": []
+    },
+    {
+      "id": "E",
+      "step": 3,
+      "runs": "always",
+      "tier": "supervisor",
+      "shared": ["writes", "staleness", "scope-rule", "scope-list", "scope-hunks"],
+      "slots": []
+    }
+  ]
+}

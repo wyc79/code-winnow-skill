@@ -372,6 +372,25 @@ Dispatch the agents **in parallel** (see `superpowers:dispatching-parallel-agent
 
 **Subagents may run on a cheaper model than yours; you may not.** Tier down the volume passes (A, B) if the runtime lets you choose, and **keep S and E at your own tier** — both are where a weaker reader fails invisibly. The table and the reasoning are in `$WINNOW/references/portability.md`. If the runtime offers no choice, ignore this.
 
+**`$WINNOW/scripts/passes.py` will assemble these prompts for you, and it is optional.** It reads the same marked blocks out of `agent-prompts.md`, attaches the shared blocks each pass takes, expands `$WINNOW` and the round directory, and prints one JSON object per pass carrying its tier, its trigger condition, the reference files it names and the assembled prompt — so a dispatcher choosing a model per pass has the table above as data rather than prose. **It refuses rather than guesses**: a slot it cannot fill, a reference file that is not there, or a declared pass with no marker is a `REFUSING:` line and exit 2, never a prompt that is quietly one block short. Copying the prompts by hand is still what this step describes and nothing below depends on the script — a runtime with no shell reads `agent-prompts.md` and loses nothing.
+
+```bash
+# illustration only — not run by the harness
+# The identity block is the three lines every markdown file in this round opens
+# with. You render it from meta.json anyway; pass the same string here.
+"$PY" "$WINNOW/scripts/passes.py" --json --round "$ROUND" \
+  --identity-block-file "$ROUND/scratch/identity.txt" --no-feature
+
+# When Step 1 resolved a feature, both halves are required — the user's own
+# words, and the file and region list they confirmed.
+"$PY" "$WINNOW/scripts/passes.py" --json --round "$ROUND" \
+  --identity-block-file "$ROUND/scratch/identity.txt" \
+  --feature "winnow the dash cooldown work" \
+  --scope-list "$ROUND/scratch/scope.txt"
+```
+
+**`--feature` or `--no-feature` is not optional, and that is the point.** The script will not guess which run this is, because the two produce different prompts: without a feature the scope blocks are absent, and with one Agent S's prompt carries the user's phrase instead of the worked example the document uses to show its shape. An extraction that kept that example would dispatch a scope pass against a feature nobody asked for, and S would return a confident boundary for it.
+
 **Division of labour, so their outputs merge cleanly — one agent, one question.** **Agent S** ran already: it drew the feature boundary in Step 1 and is finished before any of these start.
 
 | | Owns | The question it answers | Runs |

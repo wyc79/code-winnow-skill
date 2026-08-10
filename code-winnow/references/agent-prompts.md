@@ -10,11 +10,12 @@ where all the judgment lives. An agent that cannot open them still returns findi
 they are just findings from no standard at all.
 
 **Every Step 3 prompt also carries the staleness precondition below, verbatim**, and —
-when Step 1 resolved a feature — the confirmed file and region list plus *"Findings
-only from these hunks. You may read anything; report nothing else."*
+when Step 1 resolved a feature — the confirmed file and region list plus *"<!-- winnow:shared id=scope-hunks start -->Findings
+only from these hunks. You may read anything; report nothing else.<!-- winnow:shared id=scope-hunks end -->"*
 
 ## Where each agent writes — in every prompt
 
+<!-- winnow:shared id=writes start -->
 > Write your output to `<the round directory>/agent-<X>.md`, and open it with these
 > three lines, filled from `<the round directory>/meta.json`:
 >
@@ -23,6 +24,7 @@ only from these hunks. You may read anything; report nothing else."*
 > Compared:  <branch> @ <side>   vs   <base> @ <sha>   (<scope>)
 > Generated: <YYYY-MM-DD HH:MM>
 > ```
+<!-- winnow:shared id=writes end -->
 
 Expand the round directory to its real value, exactly as with `$WINNOW` — a subagent
 has no `$ROUND` either. Files inside a round are short and identical every round, so
@@ -36,6 +38,7 @@ intermediate files at the workspace root because no rule named them.
 
 ## The staleness precondition — verbatim, in every Step 3 prompt
 
+<!-- winnow:shared id=staleness start -->
 > Before you report anything, confirm your input is still current. You were given a
 > diff and a scanner JSON describing the working tree at a moment in time. Whenever you
 > open a file to verify something, check that the lines around your finding actually
@@ -44,6 +47,7 @@ intermediate files at the workspace root because no rule named them.
 > against it, do not re-derive the diff yourself, and do not silently adjust the line
 > numbers. Someone edited the tree while this review was running, and every line number
 > you hold is now a guess.
+<!-- winnow:shared id=staleness end -->
 
 Each agent has to check for itself. The orchestrator's `SNAPSHOT` comparison catches a
 change before dispatch and after return, but not one landing *during* — and the
@@ -51,11 +55,13 @@ parallel window is exactly when the user is most likely to still be working.
 
 ## The scope rule — in every Step 3 prompt when a feature was named
 
+<!-- winnow:shared id=scope-rule start -->
 > Scope was settled before you started and the user confirmed it. Work only inside it.
 > If you find something that plainly belongs to this feature and is outside the list, or
 > plainly does not belong and is inside it, **say so as an appeal** — name the location
 > and the reason, and keep reviewing under the list as given. Do not act on your own
 > scope opinion; a boundary that moves per agent stops being a boundary.
+<!-- winnow:shared id=scope-rule end -->
 
 ## The required fields
 
@@ -74,6 +80,7 @@ Dispatched only when a feature was named, and **before** A, B, C, D and E. It ge
 input diff and the user's phrase verbatim. Nothing else: no scanner JSON, no
 conversation history, no design rationale.
 
+<!-- winnow:prompt id=S start -->
 > The user asked for a review of one thing only, in their words: *"winnow the dash
 > cooldown work"*.
 > Here is the full diff. Decide, for each file and for any region within a file that
@@ -81,11 +88,13 @@ conversation history, no design rationale.
 > Return `in | out | unsure`, each with one line of reason. Use `unsure` freely — it is
 > a question the user will answer, not a failure. Do not review the code, do not report
 > chaff, do not propose changes. You are drawing a boundary, nothing else.
+<!-- winnow:prompt id=S end -->
 
 ## Agent A — chaff judgment
 
 Everything except comments and doc files. Runs always.
 
+<!-- winnow:prompt id=A start -->
 > Review this diff as if a stranger wrote it. Read `$WINNOW/references/core-patterns.md`,
 > plus the language file(s) matching the diff: `$WINNOW/references/csharp-unity.md`
 > (`.cs`), `$WINNOW/references/cpp-ue5.md` (`.cpp`/`.h`), `$WINNOW/references/python.md`
@@ -167,11 +176,13 @@ Everything except comments and doc files. Runs always.
 > wrong line, because the executor refuses any item whose total has changed. If you
 > cannot establish it, say so and drop the item rather than guessing a number.
 > Also return the candidates you dismissed, and why.
+<!-- winnow:prompt id=A end -->
 
 ## Agent B — comment and docstring concision
 
 Comments and docstrings, and only those. Runs always.
 
+<!-- winnow:prompt id=B start -->
 > For every comment in the diff, return one of: DELETE (restates the code), KEEP
 > (carries information the code cannot — a why, a workaround, an engine quirk, a
 > business rule), or TIGHTEN (right content, too many words) with a rewrite.
@@ -252,6 +263,7 @@ Comments and docstrings, and only those. Runs always.
 > You judge whether a comment earns its space, not whether it is true. If you suspect a
 > comment or docstring is factually wrong about the code, say so in one line alongside
 > your verdict and move on — another agent owns that question.
+<!-- winnow:prompt id=B end -->
 
 ## Agent C — documentation and header drift
 
@@ -261,6 +273,7 @@ exported or public names, config keys, install or run commands, public signature
 version or dependency requirements. Otherwise skip it and say so in one line in the
 report. There is no reason to pay for a third agent on a diff that renames a local.
 
+<!-- winnow:prompt id=C start -->
 > Your question is whether the documentation is **true**, not whether it is well written.
 > Four directions:
 > **(1) The change falsified a doc.** The diff altered behaviour that a documentation
@@ -385,6 +398,7 @@ report. There is no reason to pay for a third agent on a diff that renames a loc
 > cooldown elapses.` is exactly the shape that repeats in a document. Report
 > header-convention conflicts separately, as a count and a sample, not as one finding per
 > file.
+<!-- winnow:prompt id=C end -->
 
 ## Agent D — performance notes
 
@@ -394,6 +408,7 @@ I/O, a query, a lock, or an allocation inside either; or changes a data structur
 algorithm on a path already marked hot. Otherwise skip it and say so in one line in the
 report.
 
+<!-- winnow:prompt id=D start -->
 > **Read `$WINNOW/references/performance.md` before anything else.** It is the whole
 > standard for this pass and the rest of this prompt is a summary of it. Read the language
 > file matching the diff as well.
@@ -432,12 +447,14 @@ report.
 > already answered those.
 > Order notes by the strength of the frequency argument, not by guessed impact. Guessed
 > impact is a second unmeasured number stacked on the first.
+<!-- winnow:prompt id=D end -->
 
 ## Agent E — silent failure and fragility
 
 Dispatch whenever A is dispatched. There is no trigger condition: a one-line change is
 enough to add a swallowed exception.
 
+<!-- winnow:prompt id=E start -->
 > **Read `$WINNOW/references/fragility.md` before anything else**, plus
 > `$WINNOW/references/core-patterns.md` — its directive-comment table is half of what you
 > are checking — and the language file matching the diff.
@@ -543,3 +560,4 @@ enough to add a swallowed exception.
 > `occurrence:` / `of:` / `evidence:` fields Agent A uses, on the same terms — those items
 > enter the fix plan and are located by exactly the same machinery. A finding marked
 > `fix: out of scope` needs none of them; nothing is going to be located.
+<!-- winnow:prompt id=E end -->

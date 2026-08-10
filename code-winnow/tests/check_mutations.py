@@ -38,6 +38,10 @@ APPLY = os.path.join(WINNOW, "apply-and-verify.md")
 REPORT_FORMAT = os.path.join(WINNOW, "references", "report-format.md")
 TEST_SCAN = os.path.join(WINNOW, "tests", "test_scan.py")
 NOTES_TPL = os.path.join(WINNOW, "scaffold", "round", "notes.md")
+PASSES = os.path.join(WINNOW, "scripts", "passes.py")
+PASSES_JSON = os.path.join(WINNOW, "passes.json")
+PROMPTS = os.path.join(WINNOW, "references", "agent-prompts.md")
+PORTABILITY = os.path.join(WINNOW, "references", "portability.md")
 
 
 # (name, target_file, find, replace_with, pytest -k expression that MUST fail)
@@ -433,6 +437,82 @@ MUTATIONS = [
      "    clean = _html_uncommented(lines)",
      "    clean = lines",
      "html_rules_are_quiet_inside_a_comment or html_rules_are_quiet_inside_a_multiline"),
+
+    # ----------------------------------------------------------------------
+    # The judgment-pass contract. Every failure here is silent by
+    # construction: a prompt that lost a shared block, kept a placeholder, or
+    # was routed to the wrong tier is a prompt that still returns findings.
+    # They are just findings from no standard at all, and they read exactly
+    # like findings from this one.
+
+    # Dropping a shared block emits a prompt that is merely short. The
+    # staleness precondition and the scope rule are the two blocks
+    # agent-prompts.md calls verbatim-in-every-Step-3-prompt.
+    ("passes-shared-blocks", PASSES,
+     '    for bid in entry["shared"]:',
+     '    for bid in entry["shared"][:1]:',
+     "raw_prompt_is_its_marked_block or shared_block_text_is_present"),
+
+    # An unfilled slot must refuse. Filling it with anything at all hands the
+    # agent a placeholder that reads like instruction.
+    ("passes-slot-fail-closed", PASSES,
+     "    value = values.get(name)",
+     '    value = values.get(name) or "TBD"',
+     "unfilled_slot_refuses"),
+
+    # `$WINNOW` is the one the brief remembered, and it is still the one that
+    # empties every reference path in the prompt.
+    ("passes-winnow-expansion", PASSES,
+     '                prompt = prompt.replace("$WINNOW", root)',
+     "                pass",
+     "no_unexpanded_winnow"),
+
+    # A half-installed skill must not yield a slightly thinner prompt.
+    ("passes-reference-existence", PASSES,
+     "            if missing:",
+     "            if False:",
+     "missing_reference_file"),
+
+    # C and D turn on a property of the diff this script cannot read. Claiming
+    # they are dispatched publishes a decision nobody made.
+    ("passes-dispatch-honesty", PASSES,
+     '    return "conditional"',
+     '    return "yes"',
+     "dispatch_reports_conditional"),
+
+    # Agent S's prompt carries a worked example. Dispatched verbatim it draws
+    # a boundary for a feature nobody asked for, and a boundary one file
+    # narrow leaves that file reviewed by nobody with nothing to show it.
+    ("passes-S-worked-example", PASSES,
+     '        return "yes" if feature_named else "no"',
+     '        return "yes"',
+     "worked_example"),
+
+    # A locator that no longer matches locates nothing while every other test
+    # stays green.
+    ("passes-locator-staleness", PASSES_JSON,
+     '"find": "<the round directory>"',
+     '"find": "<the round folder>"',
+     "slot_locator_still_matches or stale_slot_locator"),
+
+    # The published tier must not drift from the table it claims to publish.
+    ("passes-tier-vs-portability", PASSES_JSON,
+     '"id": "E",\n      "step": 3,\n      "runs": "always",\n      "tier": "supervisor"',
+     '"id": "E",\n      "step": 3,\n      "runs": "always",\n      "tier": "mid"',
+     "tier_matches_portability or supervisor_tier"),
+
+    # The other direction: portability.md is the standard, so a change there
+    # must break the contract that mirrors it.
+    ("passes-portability-vs-tier", PORTABILITY,
+     "| **A** — chaff | Mid |",
+     "| **A** — chaff | Low |",
+     "tier_matches_portability"),
+
+    # Markers are the whole addressing scheme. Losing one must name the pass.
+    ("passes-marker-required", PROMPTS,
+     "<!-- winnow:prompt id=C start -->",
+     "",
+     "removed_marker or markers_added_no_wording or pass_prompt_is_marked"),
 ]
 
 
@@ -448,7 +528,8 @@ def run(argv, cwd=None):
 # mirror while passing in the real tree, and the harness reports it as a red
 # baseline rather than as the missing copy it is.
 COPY_DIRS = ("scripts", "tests", "references", "scaffold")
-COPY_FILES = ("SKILL.md", "review-pipeline.md", "apply-and-verify.md")
+COPY_FILES = ("SKILL.md", "review-pipeline.md", "apply-and-verify.md",
+              "passes.json")
 
 
 def mirror(dst):
