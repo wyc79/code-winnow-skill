@@ -428,6 +428,71 @@ def test_S_and_E_are_the_passes_held_at_supervisor_tier():
     assert {k for k, v in tiers.items() if v == "mid"} == {"A", "B", "C", "D"}
 
 
+def bands():
+    return {k: v for k, v in contract()["tiers"].items() if k != "_comment"}
+
+
+def test_every_tier_a_pass_uses_is_defined():
+    """A band with no definition is a dispatcher's guess.
+
+    The `tier` string is the whole routing instruction. An undefined one
+    still routes - to whatever the reader assumed it meant - and nothing in
+    the output says the assumption was made.
+    """
+    assert {p["tier"] for p in contract()["passes"]} == set(bands())
+
+
+# The failure this encodes: `supervisor` is not a vendor's top tier. It is
+# whatever the caller's strongest enrolled model happens to be, which on a
+# deployment that holds its ceiling below the top is a different model
+# entirely. A band pinned to an absolute name asks for something the caller
+# cannot route to, and that fails at dispatch rather than at review.
+ABSOLUTE = re.compile(
+    r"\b(t[123]|opus|sonnet|haiku|gpt|gemini|claude|llama|mistral)\b", re.I)
+
+
+@pytest.mark.parametrize("band", ["supervisor", "mid"])
+def test_tier_bands_are_relative_never_absolute(band):
+    spec = bands()[band]
+    assert spec["relative_to"] in ("ceiling", "below-ceiling")
+    leaked = [k for k, v in spec.items()
+              if isinstance(v, str) and ABSOLUTE.search(v)]
+    assert not leaked, (
+        f"the {band!r} band names an absolute model or tier in {leaked}. The "
+        "bands are relative to what the caller has enrolled; a pinned name "
+        "ages out of the line-up and is already wrong wherever the ceiling "
+        "sits lower than it"
+    )
+
+
+def test_the_supervisor_band_is_the_ceiling_and_says_so_in_prose_too():
+    """Mirror check, in the direction the prose owns.
+
+    `passes.json` claims the supervisor band is never tiered down. That claim
+    is portability.md's to make; if the doctrine is ever softened there, the
+    contract must not keep asserting it on its own authority.
+    """
+    assert bands()["supervisor"]["relative_to"] == "ceiling"
+    assert "supervisor is never tiered down" in read(PORTABILITY_MD).lower()
+
+
+def test_merge_is_held_at_supervisor_tier_and_is_not_delegable():
+    """Step 3.5 is the one pass that cannot be fanned out.
+
+    A dispatcher that reads six passes and no merge builds the map and skips
+    the reduce - six agent files with no consumer, which looks like six
+    results rather than one unfinished fan-out.
+    """
+    merge = contract()["merge"]
+    assert merge["tier"] == "supervisor"
+    assert merge["delegable"] is False
+
+
+def test_merge_runs_after_every_pass_it_reduces():
+    merge = contract()["merge"]
+    assert merge["step"] > max(p["step"] for p in contract()["passes"])
+
+
 # --------------------------------------------------------------------------
 # scripts/passes.py
 
@@ -467,6 +532,31 @@ def test_raw_needs_no_inputs():
 def test_every_pass_carries_every_field(key):
     for entry in full("--no-feature")["passes"]:
         assert key in entry, f"pass {entry.get('id')} is missing {key!r}"
+
+
+def test_emit_carries_the_manifest_blocks():
+    """What a dispatcher gets without opening passes.json itself.
+
+    `--json` is the interface for a caller that has a shell; a block living
+    only in the file that caller never reads does not exist for it. Passed
+    through rather than restated, so there is one definition of a band.
+    """
+    out, raw = emit("--raw"), contract()
+    for key in ("provides", "tiers", "merge"):
+        assert out.get(key) == raw[key], f"{key!r} did not survive emit"
+
+
+def test_a_single_pass_emit_still_declares_the_merge():
+    """Routing one pass is the case that most easily loses the reduce.
+
+    `--pass A` is what a dispatcher calls per agent. If `merge` were emitted
+    only alongside the full set, the per-pass caller would fan out six agents
+    and never learn that anything consumes them.
+    """
+    out = full("--no-feature", "--pass", "A")
+    assert [p["id"] for p in out["passes"]] == ["A"]
+    assert out["merge"]["tier"] == "supervisor"
+    assert out["tiers"]["mid"]["relative_to"] == "below-ceiling"
 
 
 def test_name_comes_from_the_heading():

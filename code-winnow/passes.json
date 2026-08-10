@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "provides": "judgment-passes",
   "source": "references/agent-prompts.md",
   "tier_source": "references/portability.md",
 
@@ -15,6 +16,56 @@
     "duplicated here so a dispatcher does not have to parse prose, and",
     "tests/test_passes.py parses that table and fails if the two disagree."
   ],
+
+  "tiers": {
+    "_comment": [
+      "What the two band names in `tier` mean, for a dispatcher that has its",
+      "own tier vocabulary and has to map onto it. They are RELATIVE to what",
+      "the caller has enrolled - not model names, and not absolute vendor",
+      "tiers. Mapping `supervisor` onto a fixed top tier is wrong twice: it",
+      "ages out when a line-up changes, and it is already wrong on any",
+      "deployment whose strongest enrolled model sits below that tier, where",
+      "it asks for a model the caller cannot route to and fails at dispatch.",
+      "`supervisor` means the best the caller actually has, whatever that is.",
+      "",
+      "A runtime with one model runs every pass on it. That is a supported",
+      "configuration, not a degraded one - see the head of the model-tier",
+      "section in references/portability.md."
+    ],
+    "supervisor": {
+      "relative_to": "ceiling",
+      "means": "the strongest model the caller has available; never tiered down",
+      "failure_mode": "silent - a weak read here produces a report that looks complete and is not",
+      "why": "references/portability.md, model-tier table"
+    },
+    "mid": {
+      "relative_to": "below-ceiling",
+      "means": "any capable model; equals the ceiling when the caller has only one",
+      "failure_mode": "visible - a weak read here produces a thinner report and the findings are simply absent",
+      "why": "references/portability.md, model-tier table"
+    }
+  },
+
+  "merge": {
+    "_comment": [
+      "The reduce half of Step 3. A dispatcher that fans out the passes and",
+      "stops there has run half the design: the passes disagree on purpose,",
+      "and nothing downstream reads their files directly. Declared here so",
+      "the shape is discoverable rather than inferred from six writes with no",
+      "consumer."
+    ],
+    "step": 3.5,
+    "tier": "supervisor",
+    "delegable": false,
+    "reads": "the `writes` file of every dispatched pass",
+    "produces": "the arbitrated finding set that Step 4 writes to report.md",
+    "why_not_delegable": [
+      "It is judgment over other agents' output, including E's veto over A's",
+      "deletions, graded against references/comment-evidence.md - which SKILL.md",
+      "requires the supervisor to have read itself rather than hand to an agent.",
+      "Delegating the merge means grading evidence against a filename."
+    ]
+  },
 
   "shared_blocks": {
     "writes": {

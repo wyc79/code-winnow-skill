@@ -97,7 +97,16 @@ fully assembled prompt — for the dispatcher that can route passes across provi
 is where per-pass tiering earns the most and where five readings from one model family
 share the blind spots a panel exists to remove. It **mirrors** the rows above rather than
 restating them: `tests/test_passes.py` parses this table and fails when the two disagree,
-so a tier changes here and nowhere else. The prompts themselves are never copied — they
+so a tier changes here and nowhere else.
+
+**Two things in that output are defined as data rather than mirrored**, because no table
+above holds them. `tiers` says what the two band names *mean* — both relative to what the
+caller has enrolled, never a model or a vendor tier, since a dispatcher that reads
+`supervisor` as some fixed top tier asks for a model the caller may not be able to route
+to and fails at dispatch. `merge` declares Step 3.5: supervisor tier, not delegable, and
+the consumer of every file the passes write. A caller that fans out the passes and finds
+no declared reduce has built half the design — six agent files and nothing that reads
+them. Both are additive metadata; a runtime that ignores them behaves exactly as before. The prompts themselves are never copied — they
 resolve from markers in `agent-prompts.md`, and a marker that goes missing is a refusal
 naming the pass, never a shorter prompt.
 

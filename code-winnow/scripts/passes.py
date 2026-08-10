@@ -321,9 +321,18 @@ def build(args):
 
     return {
         "version": contract["version"],
+        "provides": contract["provides"],
         "winnow_root": root,
         "raw": bool(args.raw),
         "feature": args.feature,
+        # Passed through, not restated. A dispatcher mapping `tier` onto its
+        # own vocabulary needs the band semantics in the same document as the
+        # bands, or it reads `supervisor` as a vendor tier name - which is
+        # wrong on any deployment whose ceiling sits lower. `merge` is here
+        # for the same reason: six writes with no declared consumer look like
+        # six independent results rather than one fan-out awaiting its reduce.
+        "tiers": contract["tiers"],
+        "merge": contract["merge"],
         "passes": out,
     }
 
