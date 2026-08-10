@@ -54,6 +54,12 @@ SHARED_IDS = ["writes", "staleness", "scope-rule", "scope-hunks"]
 # confirmed file and region list, which only the run knows.
 INPUT_BLOCK_IDS = ["scope-list"]
 
+# `scope-hunks` is also the one block marked inline, around a span of ordinary
+# prose rather than around a blockquote. The two forms carry different
+# obligations, so the tests below pin which ids they expect to find in each
+# rather than iterating whatever turns up.
+INLINE_IDS = ["scope-hunks"]
+
 MARKER = re.compile(
     r"<!--\s*winnow:(?P<kind>prompt|shared)\s+id=(?P<id>[A-Za-z0-9-]+)\s+"
     r"(?P<edge>start|end)\s*-->"
@@ -65,24 +71,27 @@ def read(path):
         return fh.read()
 
 
-def strip_markers(text):
-    """The document as it was before markers, byte for byte.
+def marker_sites():
+    """Every marker with the line it sits on, sorted into its two forms.
 
-    A block marker owns its whole line and takes the line with it; an inline
-    marker is removed in place. Anything else would make the AC-6 comparison
-    pass for the wrong reason.
+    A marker with a line to itself brackets a blockquote; one embedded in a
+    line of prose brackets a span inside that line.
 
-    Line endings are normalised first. The working tree here is CRLF while
-    `git show` returns the normalised blob, so a raw comparison reports every
-    line as changed and says nothing about wording.
+    The `>` in the strip is what sorts a marker someone wrote *inside* the
+    blockquote it brackets. That is a block marker in the wrong place and it has
+    to arrive as one: classified inline it would be held to the inline rule,
+    which is about the span's own quote marks, and a marker sitting behind a
+    `> ` is nowhere near them while still cutting a line off the emitted prompt.
     """
-    out = []
-    for line in text.replace("\r\n", "\n").split("\n"):
-        bare = MARKER.sub("", line)
-        if bare == "" and line != "":
-            continue                      # the line was nothing but a marker
-        out.append(bare)
-    return "\n".join(out)
+    lines = read(PROMPTS_MD).replace("\r\n", "\n").split("\n")
+    block, inline = [], []
+    for num, line in enumerate(lines):
+        alone = MARKER.sub("", line).strip(" \t>") == ""
+        for match in MARKER.finditer(line):
+            site = (match.group("kind"), match.group("id"),
+                    match.group("edge"), num, match)
+            (block if alone else inline).append(site)
+    return lines, block, inline
 
 
 def markers():
@@ -151,28 +160,108 @@ def test_every_marker_pairs_and_nests_correctly():
     assert len(seen) == len(PASS_IDS) + len(SHARED_IDS)
 
 
-def git_show(rev_path):
-    proc = subprocess.run(
-        ["git", "show", rev_path],
-        cwd=WINNOW, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        pytest.skip("git show unavailable: " + proc.stderr.decode("utf-8", "replace"))
-    return proc.stdout.decode("utf-8")
+# AC-6 — markers are punctuation for machines; they change no prose
+#
+# This was briefed as a diff: strip the markers out of the working tree, compare
+# against the last commit, and prove the change that introduced them reworded
+# nothing. That comparison is asymmetric — one side stripped, the other not — so
+# it holds only while the marker change is *uncommitted*. Committing the markers
+# put them on both sides of it, and it went red in every clean checkout: the one
+# state it passed in was a dirty worktree, which is not a state a repository can
+# be cloned into.
+#
+# The claim it existed to make was checked once, directly, and holds: stripping
+# the markers out of ca9eb4e's agent-prompts.md reproduces the file as 6e157dc
+# left it — the last commit to touch it — byte for byte. Markers went in and no
+# prose moved.
+#
+# What replaces it are the two standing obligations that claim rests on, as
+# properties of the file rather than of the working tree, so a clean checkout
+# can still check them.
 
 
-def test_markers_added_no_wording():
-    """AC-6. Markers are punctuation for machines; they change no prose.
+def test_block_markers_bracket_exactly_their_blockquote():
+    """AC-6, first obligation: a marked block is one whole blockquote.
 
-    Compared against the last commit rather than against a copy kept here,
-    so the guard cannot be satisfied by updating an expectation.
+    Every prompt and shared block here is a blockquote, and its markers sit on
+    lines of their own immediately outside it.
+
+    A marker that drifts *into* the quote silently drops the prompt's first or
+    last line. One that drifts *out* is worse than it sounds: the body stops
+    being a blockquote throughout, so `unquote` falls to its inline branch and
+    collapses the whole block into a single run with the `> ` prefixes left in.
+    Both still assemble and both still read like an instruction. Short is the
+    failure `passes.py`'s own docstring calls the one nobody notices.
     """
-    head = git_show("HEAD:code-winnow/references/agent-prompts.md").replace("\r\n", "\n")
-    assert strip_markers(read(PROMPTS_MD)) == head, (
-        "agent-prompts.md differs from HEAD by more than its markers — the "
-        "prompts are the standard the judgment passes are held to, and this "
-        "change was supposed to be invisible to a human copying them"
+    lines, block, _ = marker_sites()
+    assert {(k, i) for k, i, _, _, _ in block} == (
+        {("prompt", p) for p in PASS_IDS}
+        | {("shared", s) for s in SHARED_IDS if s not in INLINE_IDS}
+    ), (
+        "the blocks marked around a blockquote are no longer the ones expected "
+        "— this test iterates what it finds, so a marking that leaves this form "
+        "would leave it passing over nothing"
     )
+
+    def quoted(index):
+        return 0 <= index < len(lines) and lines[index].startswith(">")
+
+    wrong = []
+    for kind, mid, edge, num, _ in block:
+        inner, outer = (num + 1, num - 1) if edge == "start" else (num - 1, num + 1)
+        if lines[num].lstrip().startswith(">"):
+            wrong.append(
+                f"line {num + 1}: {kind}:{mid} {edge} is written inside the "
+                "blockquote it brackets rather than outside it"
+            )
+        elif not quoted(inner):
+            wrong.append(
+                f"line {num + 1}: {kind}:{mid} {edge} does not touch the "
+                "blockquote it brackets"
+            )
+        elif quoted(outer):
+            wrong.append(
+                f"line {num + 1}: {kind}:{mid} {edge} has quoted text on its "
+                "outer side, so the pair brackets part of a blockquote rather "
+                "than all of it — the emitted prompt is missing a line"
+            )
+    assert not wrong, "agent-prompts.md marker drift:\n" + "\n".join(wrong)
+
+
+def test_inline_markers_bracket_exactly_their_quoted_span():
+    """AC-6, second obligation: an inline marker sits on the span's own quotes.
+
+    `scope-hunks` is marked inside a sentence, around the `*"..."*` phrase the
+    intro tells the reader to pass on verbatim, so the quote marks are the
+    boundary and checking them pins the span to that phrase.
+
+    A weaker check — that the marker does not land mid-word — passes on any
+    boundary between two words, and the emitted rule is truncated all the same.
+    Take the last clause off this one and five parallel agents are told they may
+    read anything, with nothing left saying what to report.
+    """
+    lines, _, inline = marker_sites()
+    assert {(k, i) for k, i, _, _, _ in inline} == {
+        ("shared", s) for s in INLINE_IDS
+    }, (
+        "the blocks marked inline are no longer the ones expected — this test "
+        "iterates what it finds, so a marking that leaves this form would leave "
+        "it passing over nothing"
+    )
+
+    wrong = []
+    for kind, mid, edge, num, match in inline:
+        line = lines[num]
+        if edge == "start":
+            ok = line[:match.start()].endswith('*"')
+        else:
+            ok = line[match.end():].startswith('"*')
+        if not ok:
+            wrong.append(
+                f"line {num + 1}: {kind}:{mid} {edge} is not against the quote "
+                "mark of the span it brackets"
+            )
+    assert not wrong, "agent-prompts.md inline marker drift:\n" + "\n".join(wrong)
 
 
 # --------------------------------------------------------------------------

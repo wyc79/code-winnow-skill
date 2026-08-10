@@ -512,7 +512,36 @@ MUTATIONS = [
     ("passes-marker-required", PROMPTS,
      "<!-- winnow:prompt id=C start -->",
      "",
-     "removed_marker or markers_added_no_wording or pass_prompt_is_marked"),
+     "removed_marker or pass_prompt_is_marked"),
+
+    # A marker that keeps its pairing but slides one line into the blockquote
+    # it brackets. Every structural test stays green - the pair still nests,
+    # both ids are still known - and the emitted block is silently one line
+    # short. `staleness` holds no slot, so the locator guard cannot see it
+    # either, which is why the bracketing is checked rather than assumed.
+    ("passes-marker-drift", PROMPTS,
+     "> you hold is now a guess.\n<!-- winnow:shared id=staleness end -->",
+     "<!-- winnow:shared id=staleness end -->\n> you hold is now a guess.",
+     "block_markers_bracket_exactly"),
+
+    # The same drift, written the way someone editing markdown would write it:
+    # inside the quote, behind a `> `. It has to reach the test as a block
+    # marker to be caught. Sorted as an inline one it is held to the inline
+    # rule, which is about the span's quote marks, and passes untouched.
+    ("passes-marker-drift-quoted", PROMPTS,
+     "> you hold is now a guess.\n<!-- winnow:shared id=staleness end -->",
+     "> <!-- winnow:shared id=staleness end -->\n> you hold is now a guess.",
+     "block_markers_bracket_exactly"),
+
+    # The inline form of the same defect, and the reason the inline rule is the
+    # span's quote marks rather than a word boundary: this end marker moves back
+    # one whole clause, between words rather than inside one. What ships is a
+    # scope rule granting five parallel agents permission to read anything, with
+    # the clause saying what to report gone.
+    ("passes-inline-marker-drift", PROMPTS,
+     "report nothing else.<!-- winnow:shared id=scope-hunks end -->",
+     "<!-- winnow:shared id=scope-hunks end -->report nothing else.",
+     "inline_markers_bracket_exactly"),
 ]
 
 
