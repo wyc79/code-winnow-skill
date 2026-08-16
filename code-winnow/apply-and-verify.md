@@ -88,6 +88,7 @@ A fix applied to the wrong line is the worst outcome available in this whole ski
 
 - **Check `evidence:` before applying any item that removes code.** If it reads `unverified`, skip the item and report it as approved-but-unverified. Do not perform the missing lookup yourself and proceed — you are executing a decision, not re-making it, and on rungs 1 and 2 you have none of the context that decision was made in.
 - **Re-run each `evidence:` command now, before touching anything, and require the same output.** This is the one moment equality is the right test: the tree is still exactly what the plan was written against, so the recorded counts must reproduce. A count that has **grown** means something started referencing the target between approval and execution — skip that item and say so. A count that has **shrunk** means the plan was written against a tree that no longer exists; treat it as stale. Items whose evidence is `rewrite, nothing removed` have no command and skip this check.
+- **Check `mutation:` before applying any item that rewrites or deletes a test.** The user approved that item knowing which label it carried, and the label is what they were shown: `proven` means the green-under-mutation output was in front of them, `argued` means it was not. **An item that deletes a test on an `argued` label is skipped and reported**, on the same rule as `evidence: unverified` — and for the same reason: you are executing a decision, not producing the proof it was missing. `$WINNOW/references/mutation.md`.
 - Deletion beats rewriting.
 - One concern per edit. Do not fold a rename into a comment removal.
 - Behavior stays identical. If a fix would change behavior, it is not a winnowing fix — surface it separately and leave it.
@@ -126,6 +127,8 @@ diff "$ROUND/tests-before.list" "$ROUND/tests-after.list"
 - Tests present before *and* after but with a changed identifier → an approved rename, or a merge that quietly dropped a case. The name diff is the only thing that catches this.
 
 **Report the arithmetic, not a verdict:** `412 collected before, 410 after; plan declared −3 +1; reconciled, no unexplained loss.` A reader can check that. "Tests pass" cannot be checked at all — and a green run with 400 tests where there were 412 is the coverage regression `tests.md` warns about, wearing a cleanup costume.
+
+**Every test this run tightened is closed the same way it was opened: re-run the mutation from its `mutation:` field against the fixed test, and show that it now fails** — `$WINNOW/references/mutation.md`. A tightening that stays green under the mutation it was written to catch has pinned nothing and reads exactly like a fix, so a fix reported without that re-run is `argued`, not `proven`, and the report says which.
 
 Then re-run the scanner with `--since` against the pre-fix JSON — **writing to a new filename**, per the Step 4 warning:
 

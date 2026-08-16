@@ -188,6 +188,21 @@ moment an anchor contains a backtick, which doc fixes routinely do.
 Net zero there — parametrize expands at collection — which is why the field states both
 sides rather than a number. A merge that quietly drops a case shows up as `-3 +2`.
 
+### `mutation:` — on any item that rewrites or deletes a test
+
+The label, the edit and the command, on one field. `references/mutation.md` is the
+procedure; this is how it is written down.
+
+```
+      mutation:    proven — deleted `if slug in seen: continue` from unique_slugs;
+                   pytest test_dedup.py::test_unique_slugs_drops_repeats -q -> 1 passed
+```
+
+`argued — <why the mutation could not be run>` is the other permitted value, and it
+forbids a deletion exactly as `unverified` does. **Never write `proven` without the
+command and its output beside it**: the label is the whole content of the field, and a
+label nobody can check is the false confidence the finding was about.
+
 ## The performance notes document
 
 `.code-winnow/round-NN/notes.md`. Agent D's output goes here and nowhere else.

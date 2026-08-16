@@ -50,4 +50,5 @@ moved between them. The files here are:
 | `perf-declined.md` | Agent D notes the user dismissed. Persistent |
 | `substitutions.md` | companion-skill substitutes already chosen for this repo |
 | `utils/` | helper scripts a run wrote, shared across rounds |
+| `mutation/` | a mutation proof in progress — a throwaway copy of the tree, deliberately broken, deleted when the finding is settled. Nothing here is an output |
 | `round-NN/` | one round each — open its `README.md` for what is inside |

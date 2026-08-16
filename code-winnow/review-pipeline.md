@@ -412,6 +412,10 @@ If A notices a comment, it belongs to B. If B notices that a docstring is factua
 
 `$WINNOW/references/portability.md` has the full degraded path.
 
+### Test findings are proven before they are reported
+
+**A test finding says the test cannot fail, and that is checkable.** Three things go through `$WINNOW/references/mutation.md` before they reach the report: a test finding you intend to report (asserts nothing that can fail, asserts only on mocks, tautology), a proposed rewrite of a test's assertions, and a proposed test deletion. Copy the tree into `.code-winnow/mutation/<id>/`, break the one behaviour the test is *named* for, run that test in the copy. **Green under the mutation proves the finding; red disproves it** — dismiss it, and record the mutation as the reason, because a settled question with a command behind it stops the next run re-arguing the line. **You run this, not the agents**: they read a diff and never execute anything. **Every test finding in the report then carries `proven` or `argued`**, where argued is the honest label for one that could not be mutated — the reference has the three reasons that is allowed, and the rule that the label is never faked. It is not run over every test in the diff; it is for findings about to make a strong claim.
+
 ## Step 3.5 — Conflict check
 
 The split that keeps the agents' outputs mergeable also blinds A to what the author said, so without this step the report contradicts itself — proposing a deletion on one page and quoting the comment defending it on another. `DESIGN.md` (Step 3.5) has the reasoning.
@@ -715,6 +719,12 @@ This is the whole correctness gate, and it is deliberately not a fourth reviewin
 This skill removes tests on purpose: merging structural duplicates, dropping a fixture nothing requests. Those are approved changes, and they move the pass count legitimately. **So an item that changes collection declares exactly how, by name** — both sides, not a net number, so a merge that quietly drops a case shows up as `-3 +2`. The field's shape is in `report-format.md`.
 
 Without it, Step 6 has no way to distinguish an approved removal from an accidental one, and the honest reading of a smaller suite would be "restore everything" — which would block legitimate work every time the skill did one of the things it exists to do.
+
+### `mutation:` — on any item that rewrites or deletes a test
+
+Same argument as `evidence:`, and the same answer: proof is a required field, not another opinion. The item carries the mutation edit, the command, and the label — `proven` or `argued` — so the user approving a change to their tests can see whether anything was actually demonstrated. `$WINNOW/references/mutation.md` is the procedure and `report-format.md` has the field's shape.
+
+**A deletion may be proposed only on `proven`.** On `argued`, propose the tightening instead, or propose nothing: an unproven deletion of a test is the one edit in this skill most likely to be waved through unread, and the plan is where it stops being waved through.
 
 ### Then choose a rung
 
