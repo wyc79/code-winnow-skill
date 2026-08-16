@@ -28,13 +28,16 @@ The scanner stamps `mutation_candidate: true` on the false-coverage findings in 
 
 **1. Copy the tree. Never mutate the working tree.**
 
+Any recursive copy will do; the rule is what it excludes, not which tool makes it. `cp -a` and `rsync` are fine where they exist and neither is on a Windows runtime, so the portable form goes through the interpreter Step 1 already resolved:
+
 ```bash
 # illustration only — the shape, not a block to paste
-mkdir -p ".code-winnow/mutation/$ID"
-rsync -a --exclude .git --exclude .code-winnow ./ ".code-winnow/mutation/$ID/"
+ID=mock-only_test_unique_slugs
+"$PY" -c "import shutil, sys; shutil.copytree('.', sys.argv[1], symlinks=True, \
+  ignore=shutil.ignore_patterns('.git', '.code-winnow'))" ".code-winnow/mutation/$ID"
 ```
 
-`$ID` is a short slug you choose — the rule and the test name, `mock-only_test_unique_slugs` — unique within the run and safe as a directory name.
+`$ID` is a short slug you choose — the rule and the test name — unique within the run and safe as a directory name. `copytree` refuses a destination that already exists, which is the same backstop Step 2's plain `mkdir` provides: a second mutation writing into the first one's copy proves something about a tree nobody described.
 
 - **Copy the tree as it stands, including uncommitted changes.** The review is *of* uncommitted work; a copy taken from `git archive` or a fresh clone is a different tree, and a mutation of it proves something about a commit nobody asked about.
 - **Exclude `.git/` and `.code-winnow/`.** The second is what stops the copy containing a copy.
