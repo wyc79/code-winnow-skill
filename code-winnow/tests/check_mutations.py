@@ -42,6 +42,8 @@ PASSES = os.path.join(WINNOW, "scripts", "passes.py")
 PASSES_JSON = os.path.join(WINNOW, "passes.json")
 PROMPTS = os.path.join(WINNOW, "references", "agent-prompts.md")
 PORTABILITY = os.path.join(WINNOW, "references", "portability.md")
+MUTATION_MD = os.path.join(WINNOW, "references", "mutation.md")
+EXAMPLE_TEST = os.path.join(WINNOW, "examples", "mutation", "test_dedup.py")
 
 
 # (name, target_file, find, replace_with, pytest -k expression that MUST fail)
@@ -542,6 +544,51 @@ MUTATIONS = [
      "report nothing else.<!-- winnow:shared id=scope-hunks end -->",
      "<!-- winnow:shared id=scope-hunks end -->report nothing else.",
      "inline_markers_bracket_exactly"),
+
+    # ----------------------------------------------------------------------
+    # Mutation proof. The protocol's own claim is that it produces a result
+    # rather than an argument, so every guard under it has to be a result too.
+    # All four failures below are silent: a stamp nobody sets, a document that
+    # no longer describes the fixture, a tightening that pins nothing, and a
+    # fixture somebody repaired - each leaves the suite green and the protocol
+    # unexercised.
+
+    # The stamp is how the judgment pass finds its candidates. Unset, the
+    # candidate set is empty and the protocol simply never runs - which reads
+    # exactly like a diff with no false coverage in it.
+    ("mutation-candidate-stamp", SCAN,
+     '        if f["rule"] in MUTATION_RULES:\n'
+     '            f["mutation_candidate"] = True\n',
+     "        if False:\n"
+     '            f["mutation_candidate"] = True\n',
+     "mutation_candidates"),
+
+    # The worked example is extracted from mutation.md and applied to the
+    # fixture, so a document that drifts one character from the code it
+    # describes must fail rather than quietly document nothing.
+    ("mutation-example-guard-drift", MUTATION_MD,
+     "-        if slug in seen:\n-            continue\n",
+     "-        if slug in seen:  # drifted\n-            continue\n",
+     "same_code or green_under_the_mutation"),
+
+    # A "tightening" that asserts on two literals passes under the mutation it
+    # was written to catch. That is the failure Step 6's re-run exists to
+    # catch, so the re-run has to catch it here.
+    ("mutation-example-tightening-pins-nothing", MUTATION_MD,
+     '+    assert unique_slugs(names) == ["ada", "grace"]',
+     '+    assert ["ada", "grace"] == ["ada", "grace"]',
+     "fails_under_the_same_mutation"),
+
+    # The fixture is broken on purpose, and the obvious contribution is to fix
+    # it. Repaired, the example no longer demonstrates anything: the test
+    # catches the mutation, and the whole point was that it did not.
+    ("mutation-example-fixture-repaired", EXAMPLE_TEST,
+     "    unique_slugs(names)\n"
+     "    slugs = [n.strip().lower() for n in names]\n"
+     '    assert [s for i, s in enumerate(slugs) if s not in slugs[:i]] '
+     '== ["ada", "grace"]\n',
+     '    assert unique_slugs(names) == ["ada", "grace"]\n',
+     "same_code or green_under_the_mutation"),
 ]
 
 
@@ -555,8 +602,9 @@ def run(argv, cwd=None):
 # `scaffold` is here because tests/ reads it. A directory the tests depend on
 # but the mirror does not carry fails every one of those tests inside the
 # mirror while passing in the real tree, and the harness reports it as a red
-# baseline rather than as the missing copy it is.
-COPY_DIRS = ("scripts", "tests", "references", "scaffold")
+# baseline rather than as the missing copy it is. `examples` is here for the
+# same reason: test_mutation.py runs the worked example out of it.
+COPY_DIRS = ("scripts", "tests", "references", "scaffold", "examples")
 COPY_FILES = ("SKILL.md", "review-pipeline.md", "apply-and-verify.md",
               "passes.json")
 
