@@ -340,6 +340,22 @@ def test_own_workspace_is_never_reviewed(repo):
     assert rules(str(repo)) == {}
 
 
+def test_the_mutation_copy_is_never_reviewed(repo):
+    """`references/mutation.md` copies the tree under review into
+    `.code-winnow/mutation/<id>/` and deliberately breaks it there. That copy
+    is covered by the same workspace prefix as everything else in the
+    workspace - checked here rather than assumed, because the failure is the
+    scanner reporting the sabotage this skill made itself, at paths that look
+    exactly like the user's."""
+    write(repo, ".code-winnow/mutation/F3/src/app.py",
+          "def f():\n    dead = 1\n    return 2\n")
+    assert rules(str(repo)) == {}
+    # The other way in: an agent naming the copy explicitly rather than
+    # reaching it through the diff.
+    assert rules(str(repo), "--paths",
+                 ".code-winnow/mutation/F3/src/app.py") == {}
+
+
 def test_staged_then_edited_file_keeps_worktree_line_numbers(repo):
     """`git diff --cached` numbers the index blob and `git diff` numbers the
     worktree blob; both used to be matched against the worktree file. Stage a
@@ -1606,6 +1622,67 @@ MOCK_ONLY_CASES = {
 def test_mock_only_test_is_caught(tmp_path, rel, body):
     write(tmp_path, rel, body)
     assert "mock-only-test" in rules(str(tmp_path), "--paths", rel)
+
+
+# --------------------------------------------------------------------------
+# the mutation-candidate stamp
+#
+# The scanner never runs a mutation - it never runs anything - so this is a
+# flag and nothing more. It exists so the judgment pass collects the candidate
+# set out of the JSON instead of re-deriving it, and gets the same set every
+# time. references/mutation.md is what happens next.
+# --------------------------------------------------------------------------
+
+MUTATION_CANDIDATE_CASES = {
+    "test-without-assertion":
+        ("tests/na_test.py", "def test_runs():\n    compute()\n"),
+    "mock-only-test":
+        ("tests/m.test.js", "it('logs', () => {\n  const log = jest.fn();\n"
+                            "  run(log);\n  expect(log).toHaveBeenCalled();\n});\n"),
+    "tautological-test":
+        ("tests/taut_test.py", "def test_math():\n    assert 1 == 1\n"),
+    "tautological-assert":
+        ("tests/mixed_test.py",
+         "def test_total():\n    assert 1 == 1\n    assert total() == 5\n"),
+}
+
+
+@pytest.mark.parametrize("rule,rel,body",
+                         sorted((r, p, b) for r, (p, b)
+                                in MUTATION_CANDIDATE_CASES.items()))
+def test_false_coverage_findings_are_mutation_candidates(tmp_path, rule, rel, body):
+    """The stamp is on the defect, never on the severity.
+
+    The same false coverage is P1 in Python and P2 outside it - tests.md has
+    both reach tables - so a judgment pass filtering the JSON on P1 would drop
+    the commoner half of what it is meant to prove, and the half it dropped
+    would be absent from the report with nothing saying so.
+    """
+    write(tmp_path, rel, body)
+    data = json.loads(run(str(tmp_path), "--json", "--paths", rel).stdout)
+    hits = [f for f in data["findings"] if f["rule"] == rule]
+    assert hits, f"fixture no longer produces {rule}"
+    assert all(f.get("mutation_candidate") for f in hits), \
+        f"{rule} is not stamped: {hits}"
+
+
+def test_shape_only_test_findings_are_not_mutation_candidates(tmp_path):
+    """A structural duplicate and an unexplained skip are claims about a
+    test's shape, not about whether it can fail, so a mutation proves nothing
+    about either. A candidate set that swept them in would turn a tree copy
+    and a suite run per finding into the run that never finishes."""
+    write(tmp_path, "tests/d.test.js",
+          "it('two', () => {\n  expect(add(1, 1)).toBe(2);\n});\n"
+          "it('three', () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+          "it.skip('later', () => {\n  expect(add(1, 4)).toBe(5);\n});\n")
+    data = json.loads(run(str(tmp_path), "--json",
+                          "--paths", "tests/d.test.js").stdout)
+    found = {f["rule"] for f in data["findings"]}
+    assert {"duplicate-test", "skip-without-reason"} <= found, \
+        f"fixture no longer produces the shape-only rules: {sorted(found)}"
+    stamped = sorted(f["rule"] for f in data["findings"]
+                     if f.get("mutation_candidate"))
+    assert stamped == [], f"shape-only rules stamped as candidates: {stamped}"
 
 
 def test_structural_duplicates_are_caught_outside_python(tmp_path):

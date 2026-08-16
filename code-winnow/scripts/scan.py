@@ -2777,6 +2777,31 @@ def number_anchor_matches(findings):
         f["anchor_index"] = matches.index(f["line"]) + 1
 
 
+# The false-coverage family: every rule whose claim is "this test cannot fail".
+# Rules about a test's *shape* - a structural duplicate, an unexplained skip,
+# an unrequested fixture - are deliberately absent, because none of them is a
+# claim about failability and mutating them proves nothing.
+MUTATION_RULES = frozenset({
+    "test-without-assertion", "mock-only-test",
+    "tautological-test", "tautological-assert",
+})
+
+
+def mark_mutation_candidates(findings):
+    """Stamp the findings whose claim is checkable by mutation.
+
+    A flag and nothing else. The scanner stays fast and dumb: it never copies a
+    tree and never runs a test, and `references/mutation.md` is a judgment step
+    that costs both, per finding. This exists so the judgment pass collects the
+    candidate set out of the JSON instead of re-deriving the rule - and so it
+    derives it from the defect rather than the severity, since the same false
+    coverage is P1 in Python and P2 outside it.
+    """
+    for f in findings:
+        if f["rule"] in MUTATION_RULES:
+            f["mutation_candidate"] = True
+
+
 def split_declined(findings, declined_path):
     """Move findings the user already rejected out of the live list.
 
@@ -3137,6 +3162,7 @@ def main():
     stem = args.stem or report_stem(target, generated)
     number_occurrences(findings)
     number_anchor_matches(findings)
+    mark_mutation_candidates(findings)
     declined = []
     if args.declined:
         findings, declined = split_declined(findings, args.declined)

@@ -144,6 +144,8 @@ It flags regex- and AST-level candidates: fields and locals declared and never r
 
 In test files it additionally flags tests with no assertion, assertions that cannot fail, tests whose every assertion checks a mock, structurally identical tests that differ only in literals, and skips with no reason. That pass runs for pytest/unittest, NUnit/xUnit/MSTest, GoogleTest, Go, Jest/Vitest/Mocha, JUnit, Rust, RSpec, and XCTest — a JS or Go test file gets it even though nothing else here understands JS or Go. `$WINNOW/references/tests.md` is the judgment standard.
 
+**The first three of those carry `mutation_candidate: true` in the JSON.** They are the false-coverage family — the findings whose claim is that the test cannot fail — and Step 3 proves that claim rather than arguing it, per `$WINNOW/references/mutation.md`. The stamp is a filter over `scan.json`, nothing more: the scanner does not run mutations, and the field is keyed on the rule rather than the severity because the same defect is P2 outside Python.
+
 **Three of the scanner's test rules are narrower than that list suggests, and a report written from the list alone will claim coverage that did not happen:**
 
 | Rule | Actual reach |
